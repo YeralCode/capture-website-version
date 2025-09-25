@@ -1,0 +1,19 @@
+services:
+  screenshot-scraper:
+    build: .
+    container_name: screenshot-scraper
+    volumes:
+      - ./screenshots:/app/screenshots
+      - ./output:/app/output
+      - ./scraped_data:/app/scraped_data
+      - ./urls_prueba_pequeno.txt:/app/urls_prueba_pequeno.txt
+      - ./urls_instagram_facebook.txt:/app/urls_instagram_facebook.txt
+    environment:
+      - NODE_ENV=production
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+    shm_size: '1gb'
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_ADMIN

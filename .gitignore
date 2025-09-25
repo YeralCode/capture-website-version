@@ -1,0 +1,72 @@
+# Dependencias de Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos de configuración del sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de entornos virtuales de Python
+venv/
+venv_*/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Archivos de salida y capturas
+output/
+screenshots/
+scraped_data/
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# Archivos temporales
+temp_*
+*.tmp
+*.temp
+
+# Archivos de logs
+*.log
+logs/
+
+# Archivos de configuración local
+.env
+.env.local
+.env.production
+.env.development
+
+# Archivos del IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archivos de respaldo
+*.backup
+*.bak
+*~
+
+# Archivos de sistema Linux
+.directory
+
+# Archivos específicos del proyecto
+urls_*.txt
+!urls.txt
+
+# Credenciales y archivos sensibles
+config/credentials.js
+config/auth.json
+*.key
+*.pem
+*.crt
+
+# Archivos de Playwright
+test-results/
+playwright-report/
+playwright/.cache/
