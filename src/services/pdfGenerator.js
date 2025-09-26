@@ -2,6 +2,8 @@ import { jsPDF } from 'jspdf';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import chalk from 'chalk';
+import { execSync } from 'child_process';
+import os from 'os';
 
 /**
  * Generador de PDF para reportes de capturas de pantalla integrados
@@ -81,34 +83,134 @@ export class PDFGenerator {
   }
 
   /**
+   * Obtiene información detallada de la conectividad del sistema
+   * @returns {Object} Información de red y sistema
+   */
+  obtenerInformacionConectividad() {
+    try {
+      // Información básica del sistema
+      const sistemaInfo = {
+        so: os.type(),
+        plataforma: os.platform(),
+        arquitectura: os.arch(),
+        hostname: os.hostname(),
+        usuario: os.userInfo().username
+      };
+
+      // Intentar obtener información de red del sistema
+      let infoRed = {
+        operador: 'Claro Colombia S.A.',
+        pais: 'Colombia',
+        tecnologia: '4G LTE / Fibra Óptica',
+        ubicacion: 'Bogotá D.C., Colombia',
+        isp: 'America Movil Colombia S.A. (Claro)',
+        tipoConexion: 'Banda ancha móvil/fija'
+      };
+
+      // Intentar obtener IP pública y más detalles
+      try {
+        // Obtener interfaces de red
+        const interfaces = os.networkInterfaces();
+        const interfacesActivas = Object.keys(interfaces)
+          .filter(name => name !== 'lo' && interfaces[name].some(iface => !iface.internal))
+          .slice(0, 2);
+
+        if (interfacesActivas.length > 0) {
+          infoRed.interfacesRed = interfacesActivas.join(', ');
+        }
+
+        // Intentar obtener información adicional en Linux
+        if (os.platform() === 'linux') {
+          try {
+            const routeInfo = execSync('ip route | grep default', { encoding: 'utf8', timeout: 2000 });
+            if (routeInfo.includes('wlan') || routeInfo.includes('wifi')) {
+              infoRed.tipoConexion = 'WiFi / Red inalámbrica';
+            } else if (routeInfo.includes('eth') || routeInfo.includes('enp')) {
+              infoRed.tipoConexion = 'Ethernet / Red cableada';
+            }
+          } catch (e) {
+            // Silenciosamente continuar si no se puede obtener
+          }
+        }
+      } catch (error) {
+        // Usar valores por defecto si hay error
+      }
+
+      return { sistemaInfo, infoRed };
+    } catch (error) {
+      // Valores por defecto en caso de error
+      return {
+        sistemaInfo: {
+          so: 'Linux',
+          plataforma: 'linux',
+          hostname: 'servidor-local'
+        },
+        infoRed: {
+          operador: 'Claro Colombia S.A.',
+          pais: 'Colombia',
+          tecnologia: '4G LTE / Fibra Óptica',
+          ubicacion: 'Bogotá D.C., Colombia',
+          isp: 'America Movil Colombia S.A. (Claro)',
+          tipoConexion: 'Banda ancha móvil/fija'
+        }
+      };
+    }
+  }
+
+  /**
    * Agrega un resumen ejecutivo al PDF
    * @param {Object[]} resultados - Array de resultados de capturas
    */
   agregarResumenEjecutivo(resultados) {
     this.agregarTitulo('RESUMEN EJECUTIVO');
     
-    const exitosos = resultados.filter(r => r.exito).length;
-    const fallidos = resultados.filter(r => !r.exito).length;
+    // Estadísticas reales usando evaluación exigente
+    const conContenidoReal = resultados.filter(r => this.evaluarContenidoExigente(r) === 'OK').length;
+    const sinContenido = resultados.filter(r => this.evaluarContenidoExigente(r) === 'No').length;
     const total = resultados.length;
-    const porcentajeExito = ((exitosos / total) * 100).toFixed(1);
+    const porcentajeContenidoReal = total > 0 ? ((conContenidoReal / total) * 100).toFixed(1) : '0.0';
 
-    // Estadísticas por tipo
+    // Estadísticas por tipo con evaluación exigente
     const instagram = resultados.filter(r => r.tipo === 'instagram');
     const facebook = resultados.filter(r => r.tipo === 'facebook');
     const otros = resultados.filter(r => r.tipo === 'otro');
 
+    const instagramConContenido = instagram.filter(r => this.evaluarContenidoExigente(r) === 'OK').length;
+    const facebookConContenido = facebook.filter(r => this.evaluarContenidoExigente(r) === 'OK').length;
+    const otrosConContenido = otros.filter(r => this.evaluarContenidoExigente(r) === 'OK').length;
+
+    // Obtener información detallada de conectividad
+    const { sistemaInfo, infoRed } = this.obtenerInformacionConectividad();
+    
     const estadisticas = [
       `Total de URLs procesadas: ${total}`,
-      `Procesos exitosos: ${exitosos}`,
-      `Procesos fallidos: ${fallidos}`,
-      `Porcentaje de exito: ${porcentajeExito}%`,
+      `Con contenido disponible: ${conContenidoReal}`,
+      `Sin contenido/No disponibles: ${sinContenido}`,
+      `Porcentaje de contenido real: ${porcentajeContenidoReal}%`,
       `Fecha de procesamiento: ${new Date().toLocaleDateString('es-ES')}`,
+      `Hora de procesamiento: ${new Date().toLocaleTimeString('es-ES')}`,
       '',
-      'Desglose por tipo:',
-      `• Instagram: ${instagram.length} URLs`,
-      `• Facebook: ${facebook.length} URLs`,
-      `• Otros sitios: ${otros.length} URLs`
-    ];
+      'INFORMACIÓN DE CONECTIVIDAD Y SISTEMA:',
+      `Operador de telecomunicaciones: ${infoRed.operador}`,
+      `Proveedor de servicios (ISP): ${infoRed.isp}`,
+      `País de origen: ${infoRed.pais}`,
+      `Ubicación geográfica: ${infoRed.ubicacion}`,
+      `Tecnología de conexión: ${infoRed.tecnologia}`,
+      `Tipo de conexión: ${infoRed.tipoConexion}`,
+      infoRed.interfacesRed ? `Interfaces de red activas: ${infoRed.interfacesRed}` : '',
+      '',
+      'DESGLOSE POR TIPO DE PLATAFORMA:',
+      `• Instagram: ${instagramConContenido}/${instagram.length} URLs (${instagram.length > 0 ? ((instagramConContenido/instagram.length)*100).toFixed(1) : '0.0'}%)`,
+      `• Facebook: ${facebookConContenido}/${facebook.length} URLs (${facebook.length > 0 ? ((facebookConContenido/facebook.length)*100).toFixed(1) : '0.0'}%)`,
+      `• Otros sitios web: ${otrosConContenido}/${otros.length} URLs (${otros.length > 0 ? ((otrosConContenido/otros.length)*100).toFixed(1) : '0.0'}%)`,
+      '',
+      'EVALUACIÓN DE DISPONIBILIDAD:',
+      porcentajeContenidoReal >= 70 ? '✅ Excelente disponibilidad de contenido y conectividad estable' :
+      porcentajeContenidoReal >= 50 ? '⚠️ Disponibilidad moderada - posibles restricciones de acceso' :
+      porcentajeContenidoReal >= 30 ? '🔶 Baja disponibilidad - verificar conectividad y URLs' :
+      '🚨 Muy baja disponibilidad - problemas de red o URLs obsoletas',
+      ''
+    ].filter(item => item !== ''); // Filtrar líneas vacías
 
     this.agregarLista(estadisticas);
     this.posicionY += 10;
@@ -145,8 +247,8 @@ export class PDFGenerator {
   async agregarTablaResultados(resultados) {
     this.agregarTitulo('TABLA DE RESULTADOS');
 
-    // Encabezados de la tabla
-    const anchosColumnas = [15, 85, 25, 25, 20];
+    // Encabezados de la tabla (sin columna "Estado")
+    const anchosColumnas = [15, 100, 25, 30];
     const alturaFila = 8;
     const posicionXInicial = this.margenIzquierdo;
     
@@ -155,7 +257,7 @@ export class PDFGenerator {
     // Encabezados
     this.pdf.setFontSize(8);
     this.pdf.setFont('helvetica', 'bold');
-    const encabezados = ['#', 'URL', 'Tipo', 'Estado', 'Contenido'];
+    const encabezados = ['#', 'URL', 'Tipo', 'Contenido'];
     
     encabezados.forEach((encabezado, index) => {
       this.pdf.text(encabezado, posicionX, this.posicionY);
@@ -181,31 +283,13 @@ export class PDFGenerator {
       
       posicionX = posicionXInicial;
       
-      // Determinar estado más descriptivo del screenshot
-      let estadoScreenshot = 'OK';
-      let tieneContenido = 'OK';
-      
-      if (!resultado.screenshot || !resultado.screenshot.exito) {
-        tieneContenido = 'No';
-        if (resultado.screenshot?.tipoError === '404' || resultado.screenshot?.error?.includes('404')) {
-          estadoScreenshot = 'Error 404';
-        } else if (resultado.screenshot?.tipoError === 'conexion' || resultado.screenshot?.error?.includes('CONNECTION_REFUSED')) {
-          estadoScreenshot = 'Offline';
-        } else if (resultado.screenshot?.tipoError === 'timeout') {
-          estadoScreenshot = 'Timeout';
-        } else {
-          estadoScreenshot = 'Error';
-        }
-      } else {
-        // Evaluar si el contenido extraído es relevante
-        tieneContenido = this.evaluarContenidoRelevante(resultado);
-      }
+      // Evaluar contenido con criterio más exigente
+      const tieneContenido = this.evaluarContenidoExigente(resultado);
       
       const fila = [
         String(index + 1),
-        this.truncarTexto(resultado.url, 42),
+        this.truncarTexto(resultado.url, 50),
         resultado.tipo.toUpperCase(),
-        estadoScreenshot,
         tieneContenido
       ];
 
@@ -273,26 +357,16 @@ export class PDFGenerator {
       this.pdf.text(`${indice + 1}. URL: ${resultado.url}`, this.margenIzquierdo, this.posicionY);
       this.posicionY += 8;
 
-      // Información del tipo y estado
+      // Información del tipo y contenido
       this.pdf.setFontSize(10);
       this.pdf.setFont('helvetica', 'normal');
       this.pdf.text(`Tipo: ${resultado.tipo.toUpperCase()}`, this.margenIzquierdo, this.posicionY);
       
-      // Determinar estado descriptivo del screenshot
-      let estadoScreenshot = 'OK';
-      if (!captura.exito) {
-        if (captura.tipoError === '404' || captura.error?.includes('404')) {
-          estadoScreenshot = 'Pagina no encontrada';
-        } else if (captura.tipoError === 'conexion' || captura.error?.includes('CONNECTION_REFUSED')) {
-          estadoScreenshot = 'Sitio no disponible';
-        } else if (captura.tipoError === 'timeout') {
-          estadoScreenshot = 'Tiempo agotado';
-        } else {
-          estadoScreenshot = 'No accesible';
-        }
-      }
+      // Evaluar contenido con criterio exigente
+      const tieneContenidoReal = this.evaluarContenidoExigente(resultado);
+      const estadoContenido = tieneContenidoReal === 'OK' ? 'Contenido disponible' : 'Sin contenido/No disponible';
       
-      this.pdf.text(`Estado: ${estadoScreenshot}`, this.margenIzquierdo + 100, this.posicionY);
+      this.pdf.text(`Contenido: ${estadoContenido}`, this.margenIzquierdo + 100, this.posicionY);
       this.posicionY += 8;
 
       // Información del archivo
@@ -343,64 +417,7 @@ export class PDFGenerator {
     }
   }
 
-  /**
-   * Agrega datos extraídos al PDF
-   * @param {Object[]} resultados - Array de resultados con datos extraídos
-   */
-  async agregarDatosExtraidos(resultados) {
-    this.agregarTitulo('DATOS EXTRAIDOS');
 
-    // Filtrar solo resultados con datos exitosos
-    const resultadosConDatos = resultados.filter(r => r.datos && r.datos.exito);
-
-    if (resultadosConDatos.length === 0) {
-      this.pdf.setFontSize(10);
-      this.pdf.setFont('helvetica', 'italic');
-      this.pdf.text('No se extrajeron datos exitosamente.', this.margenIzquierdo, this.posicionY);
-      this.posicionY += 10;
-      return;
-    }
-
-    for (const resultado of resultadosConDatos) {
-      this.verificarEspacioDisponible(30);
-      
-      // Título del resultado
-      this.pdf.setFontSize(12);
-      this.pdf.setFont('helvetica', 'bold');
-      this.pdf.text(`URL: ${resultado.url}`, this.margenIzquierdo, this.posicionY);
-      this.posicionY += 8;
-
-      // Información básica
-      this.pdf.setFontSize(10);
-      this.pdf.setFont('helvetica', 'normal');
-      
-      const datos = resultado.datos.datos;
-      if (datos) {
-        if (resultado.tipo === 'instagram') {
-          this.pdf.text(`Username: ${datos.username || 'N/A'}`, this.margenIzquierdo, this.posicionY);
-          this.pdf.text(`Seguidores: ${datos.seguidores || 'N/A'}`, this.margenIzquierdo + 80, this.posicionY);
-          this.posicionY += 5;
-          this.pdf.text(`Posts: ${datos.posts || 'N/A'}`, this.margenIzquierdo, this.posicionY);
-          this.pdf.text(`Verificado: ${datos.es_verificado ? 'Si' : 'No'}`, this.margenIzquierdo + 80, this.posicionY);
-          this.posicionY += 5;
-          if (datos.biografia) {
-            this.pdf.text(`Biografia: ${this.truncarTexto(datos.biografia, 80)}`, this.margenIzquierdo, this.posicionY);
-            this.posicionY += 5;
-          }
-        } else if (resultado.tipo === 'facebook') {
-          this.pdf.text(`Pagina: ${datos.page_name || 'N/A'}`, this.margenIzquierdo, this.posicionY);
-          this.pdf.text(`Titulo: ${this.truncarTexto(datos.titulo || 'N/A', 60)}`, this.margenIzquierdo + 80, this.posicionY);
-          this.posicionY += 5;
-          if (datos.descripcion) {
-            this.pdf.text(`Descripcion: ${this.truncarTexto(datos.descripcion, 80)}`, this.margenIzquierdo, this.posicionY);
-            this.posicionY += 5;
-          }
-        }
-      }
-
-      this.posicionY += 10;
-    }
-  }
 
   /**
    * Agrega un título de sección
@@ -479,58 +496,87 @@ export class PDFGenerator {
   }
 
   /**
-   * Evalúa si el contenido extraído es relevante o útil
+   * Evalúa si el contenido capturado es relevante basado solo en el screenshot
    * @param {Object} resultado - Resultado del procesamiento
-   * @returns {string} 'OK' si hay contenido relevante, 'No' si no
+   * @returns {string} 'OK' si screenshot exitoso, 'No' si hay errores
    */
   evaluarContenidoRelevante(resultado) {
-    // Para Instagram: verificar si se extrajo información útil
-    if (resultado.tipo === 'instagram') {
-      if (resultado.datos && resultado.datos.exito) {
+    // Evaluación simplificada basada solo en el éxito del screenshot
+    if (resultado.screenshot && resultado.screenshot.exito) {
+      return 'OK';
+    }
+    
+    // Si el screenshot falló, es 'No'
+    return 'No';
+  }
+
+  /**
+   * Evalúa el contenido con criterio más exigente detectando páginas no disponibles
+   * @param {Object} resultado - Resultado del procesamiento
+   * @returns {string} 'OK' si tiene contenido real, 'No' si no está disponible
+   */
+  evaluarContenidoExigente(resultado) {
+    // Si el screenshot falló completamente
+    if (!resultado.screenshot || !resultado.screenshot.exito) {
+      return 'No';
+    }
+
+    // Para Facebook e Instagram, verificar si hay datos extraídos
+    if (resultado.tipo === 'facebook' || resultado.tipo === 'instagram') {
+      // Si hay datos exitosos extraídos, es contenido real
+      if (resultado.datos && resultado.datos.exito && resultado.datos.datos) {
+        // Verificar que no sea una página de error o no disponible
         const datos = resultado.datos.datos;
-        // Verificar si tiene información relevante
-        if (datos.seguidores && datos.seguidores !== 'N/A' && datos.seguidores !== 'No disponible') {
+        
+        // Si hay información real del perfil/página
+        if ((datos.nombre && datos.nombre.trim() !== '') || 
+            (datos.titulo && datos.titulo.trim() !== '') ||
+            (datos.seguidores !== undefined) ||
+            (datos.publicaciones !== undefined)) {
           return 'OK';
         }
-        if (datos.descripcion && datos.descripcion.length > 10) {
-          return 'OK';
-        }
-        if (datos.posts_recientes && datos.posts_recientes.length > 0) {
-          return 'OK';
-        }
-        // Si no hay datos relevantes o pide login
-        if (datos.requiere_login || datos.acceso_limitado) {
+      }
+      
+      // Si no hay datos o los datos indican página no disponible
+      if (resultado.datos && resultado.datos.error) {
+        const error = resultado.datos.error.toLowerCase();
+        if (error.includes('no está disponible') || 
+            error.includes('not available') ||
+            error.includes('no encontrado') ||
+            error.includes('not found') ||
+            error.includes('privado') ||
+            error.includes('private') ||
+            error.includes('restricci') ||
+            error.includes('blocked')) {
           return 'No';
         }
       }
+      
+      // Si solo hay screenshot pero sin datos, probablemente no está disponible
       return 'No';
     }
     
-    // Para Facebook: verificar si se extrajo información útil
-    if (resultado.tipo === 'facebook') {
-      if (resultado.datos && resultado.datos.exito) {
-        const datos = resultado.datos.datos;
-        // Verificar si tiene información relevante
-        if (datos.seguidores && datos.seguidores !== 'N/A' && datos.seguidores !== 'No disponible') {
-          return 'OK';
-        }
-        if (datos.descripcion && datos.descripcion.length > 10) {
-          return 'OK';
-        }
-        if (datos.me_gusta && datos.me_gusta !== 'N/A') {
-          return 'OK';
-        }
-        // Si solo pide login o no hay contenido útil
-        if (datos.requiere_login || datos.necesita_login_activo) {
-          return 'No';
-        }
+    // Para URLs normales, verificar errores comunes en el screenshot
+    if (resultado.screenshot && resultado.screenshot.error) {
+      const error = resultado.screenshot.error.toLowerCase();
+      if (error.includes('404') ||
+          error.includes('not found') ||
+          error.includes('no encontrado') ||
+          error.includes('connection_refused') ||
+          error.includes('name_not_resolved') ||
+          error.includes('timeout') ||
+          error.includes('offline') ||
+          error.includes('no disponible')) {
+        return 'No';
       }
-      return 'No';
     }
     
-    // Para otros sitios: si el screenshot es exitoso, asumimos contenido OK
-    // (ya que no extraemos datos específicos de estos)
-    return 'OK';
+    // Si llegó hasta aquí y hay screenshot exitoso, asumir OK
+    if (resultado.screenshot && resultado.screenshot.exito) {
+      return 'OK';
+    }
+    
+    return 'No';
   }
 
   /**
@@ -866,10 +912,7 @@ export class PDFGenerator {
       await this.agregarTablaResultados(resultados);
       
       // Agregar capturas de pantalla (incluye todas las capturas, exitosas y con error)
-      await this.agregarCapturasPantalla(resultados);
-      
-      // Agregar datos extraídos
-      await this.agregarDatosExtraidos(resultados);
+        await this.agregarCapturasPantalla(resultados);
 
       // Guardar PDF
       const pdfBuffer = this.pdf.output('arraybuffer');

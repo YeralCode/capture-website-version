@@ -1,23 +1,15 @@
-import { InstagramScraperService } from './instagramScraperService.js';
-import { FacebookScraperService } from './facebookScraperService.js';
 import { ScreenshotService } from './screenshotService.js';
 import chalk from 'chalk';
 import ora from 'ora';
 
 /**
- * Servicio integrado que combina scraping de datos con captura de screenshots
- * Instagram y Facebook: Scraping + Screenshots con Playwright
- * Otros sitios: Solo Screenshots con capture-website
+ * Servicio integrado para captura de screenshots únicamente
+ * Todos los sitios: Solo Screenshots con Playwright (incluye marcas de agua)
+ * NO realiza scraping de datos
  */
 export class IntegratedScrapingService {
   constructor(configuracion = {}) {
     this.configuracion = {
-      scraping: {
-        directorioSalida: 'scraped_data',
-        maxPosts: 10,
-        incluirComentarios: false,
-        incluirReacciones: true
-      },
       screenshots: {
         width: 1920,
         height: 1080,
@@ -27,270 +19,179 @@ export class IntegratedScrapingService {
       ...configuracion
     };
     
-    // Crear el servicio de screenshots primero
+    // Solo crear el servicio de screenshots
     this.screenshotService = new ScreenshotService({...this.configuracion.screenshots, directorioSalida: "screenshots"});
     
-    // Inyectar el servicio de screenshots en los servicios de scraping
-    this.instagramService = new InstagramScraperService(this.configuracion.scraping, this.screenshotService);
-    this.facebookService = new FacebookScraperService(this.configuracion.scraping, this.screenshotService);
-    
     this.resultadosCompletos = [];
+    this.inicializado = false; // Flag para evitar doble inicialización
   }
 
   /**
-   * Inicializa todos los servicios
+   * Inicializa el servicio de screenshots con autenticación completa
    */
   async inicializar() {
-    const spinner = ora('Inicializando servicios integrados...').start();
+    if (this.inicializado) {
+      console.log(chalk.cyan('🔄 Servicio ya inicializado, usando sesiones existentes'));
+      return;
+    }
+
+    const spinner = ora('Inicializando servicio con autenticación completa...').start();
     
     try {
-      await this.instagramService.inicializar();
-      await this.facebookService.inicializar();
-      await this.screenshotService.inicializar();
+      // Usar inicialización completa que incluye login de Facebook e Instagram
+      await this.screenshotService.inicializarConInstagram();
       
-      spinner.succeed('✅ Servicios integrados inicializados');
+      this.inicializado = true; // Marcar como inicializado
+      
+      spinner.succeed('✅ Servicio inicializado con sesiones de Facebook e Instagram');
+      console.log(chalk.green('🔐 Las sesiones se mantendrán durante todo el proceso'));
     } catch (error) {
-      spinner.fail('❌ Error al inicializar servicios');
+      spinner.fail('❌ Error al inicializar servicio con autenticación');
       throw error;
     }
   }
 
   /**
-   * Procesa URLs con scraping y capturas
+   * Procesa URLs solo para capturas de pantalla (con sesiones pre-autenticadas)
    */
   async procesarUrls(urls) {
-    console.log(chalk.blue('\n🚀 PROCESANDO URLs CON SCRAPING Y SCREENSHOTS\n'));
+    console.log(chalk.blue('\n📸 PROCESANDO URLs CON SESIONES PRE-AUTENTICADAS\n'));
     
-    // Categorizar URLs
+    // Categorizar URLs para mostrar información
     const urlsInstagram = urls.filter(url => this.esUrlInstagram(url));
     const urlsFacebook = urls.filter(url => this.esUrlFacebook(url));
     const urlsOtros = urls.filter(url => !this.esUrlInstagram(url) && !this.esUrlFacebook(url));
 
-    console.log(chalk.cyan(`📱 Instagram: ${urlsInstagram.length} URLs (Scraping + Screenshots con Playwright)`));
-    console.log(chalk.cyan(`📘 Facebook: ${urlsFacebook.length} URLs (Scraping + Screenshots con Playwright)`));
-    console.log(chalk.cyan(`🌐 Otros sitios: ${urlsOtros.length} URLs (Solo Screenshots con capture-website)`));
+    console.log(chalk.cyan(`📱 Instagram: ${urlsInstagram.length} URLs`));
+    console.log(chalk.cyan(`📘 Facebook: ${urlsFacebook.length} URLs`));
+    console.log(chalk.cyan(`🌐 Otros sitios: ${urlsOtros.length} URLs`));
+
+    // 🔐 VALIDAR AUTENTICACIÓN CRÍTICA
+    await this.validarAutenticacionRequerida(urlsFacebook, urlsInstagram);
+
+    console.log(chalk.green(`🚀 Validación exitosa - procediendo con las capturas`));
+    console.log(chalk.yellow(`✨ Todas las capturas incluyen barra de navegador real`));
 
     const resultados = [];
 
-    // Procesar Instagram
-    if (urlsInstagram.length > 0) {
-      const resultadosInstagram = await this.procesarInstagram(urlsInstagram);
-      resultados.push(...resultadosInstagram);
+    // Procesar todas las URLs solo para screenshots
+    for (const url of urls) {
+      const resultado = await this.procesarUrlParaScreenshot(url);
+      resultados.push(resultado);
     }
 
-    // Procesar Facebook
+    return resultados;
+  }
+
+  /**
+   * Valida que las sesiones estén autenticadas cuando hay URLs de Facebook/Instagram
+   */
+  async validarAutenticacionRequerida(urlsFacebook, urlsInstagram) {
+    console.log(chalk.blue('\n🔐 VALIDANDO AUTENTICACIÓN REQUERIDA...\n'));
+    
+    let erroresAutenticacion = [];
+    
+    // Validar Facebook si hay URLs de Facebook
     if (urlsFacebook.length > 0) {
-      const resultadosFacebook = await this.procesarFacebook(urlsFacebook);
-      resultados.push(...resultadosFacebook);
-    }
-
-    // Procesar otros sitios
-    if (urlsOtros.length > 0) {
-      const resultadosOtros = await this.procesarOtrosSitios(urlsOtros);
-      resultados.push(...resultadosOtros);
-    }
-
-    return resultados;
-  }
-
-  /**
-   * Procesa URLs de Instagram
-   */
-  async procesarInstagram(urls) {
-    console.log(chalk.blue('\n📱 PROCESANDO INSTAGRAM (SCRAPING + SCREENSHOTS CON PLAYWRIGHT)\n'));
-    
-    // Extraer datos
-    console.log(chalk.blue('🔍 Extrayendo datos de Instagram...\n'));
-    const datosInstagram = await this.procesarInstagramUrls(urls);
-    
-    // Capturar screenshots con Playwright
-    console.log(chalk.blue('\n📸 Capturando screenshots de Instagram con Playwright...'));
-    const screenshotsInstagram = await this.capturarConPlaywright(urls);
-    
-    // Combinar resultados
-    return this.combinarResultados(urls, datosInstagram, screenshotsInstagram, 'instagram');
-  }
-
-  /**
-   * Procesa URLs de Facebook
-   */
-  async procesarFacebook(urls) {
-    console.log(chalk.blue('\n📘 PROCESANDO FACEBOOK (SCRAPING + SCREENSHOTS CON PLAYWRIGHT)\n'));
-    
-    // Extraer datos
-    console.log(chalk.blue('🔍 Extrayendo datos de Facebook...\n'));
-    const datosFacebook = await this.procesarFacebookUrls(urls);
-    
-    // Capturar screenshots con Playwright
-    console.log(chalk.blue('\n📸 Capturando screenshots de Facebook con Playwright...'));
-    const screenshotsFacebook = await this.capturarConPlaywright(urls);
-    
-    // Combinar resultados
-    return this.combinarResultados(urls, datosFacebook, screenshotsFacebook, 'facebook');
-  }
-
-  /**
-   * Procesa otros sitios web
-   */
-  async procesarOtrosSitios(urls) {
-    console.log(chalk.blue('\n🌐 PROCESANDO OTROS SITIOS (SOLO SCREENSHOTS CON CAPTURE-WEBSITE)\n'));
-    
-    // Solo capturar screenshots
-    console.log(chalk.blue('📸 Capturando screenshots con Playwright...'));
-    const screenshots = await this.capturarConPlaywright(urls);
-    
-    // Combinar resultados (sin datos extraídos)
-    return this.combinarResultados(urls, [], screenshots, 'otro');
-  }
-
-  /**
-   * Procesa URLs de Instagram individualmente
-   */
-  async procesarInstagramUrls(urls) {
-    const resultados = [];
-    
-    for (const url of urls) {
-      try {
-        let resultado;
-        
-        if (url.includes('/p/')) {
-          // Es un post
-          const postId = this.extraerPostId(url);
-          resultado = await this.instagramService.extraerPost(postId);
-        } else {
-          // Es un perfil
-          const username = this.extraerUsername(url);
-          resultado = await this.instagramService.extraerPerfil(username);
-        }
-        
-        resultados.push({
-          url,
-          exito: true,
-          datos: resultado,
-          timestamp: new Date().toISOString()
-        });
-        
-      } catch (error) {
-        resultados.push({
-          url,
-          exito: false,
-          error: error.message,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-    
-    return resultados;
-  }
-
-  /**
-   * Procesa URLs de Facebook individualmente
-   */
-  async procesarFacebookUrls(urls) {
-    const resultados = [];
-    
-    for (const url of urls) {
-      try {
-        const pageName = this.extraerPageName(url);
-        const resultado = await this.facebookService.extraerPagina(pageName);
-        
-        resultados.push({
-          url,
-          exito: true,
-          datos: resultado,
-          timestamp: new Date().toISOString()
-        });
-        
-      } catch (error) {
-        resultados.push({
-          url,
-          exito: false,
-          error: error.message,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-    
-    return resultados;
-  }
-
-  /**
-   * Captura screenshots usando Playwright (para Instagram y Facebook)
-   */
-  async capturarConPlaywright(urls) {
-    const resultados = [];
-    
-    for (let i = 0; i < urls.length; i++) {
-      const url = urls[i];
-      const resultado = await this.screenshotService.capturarScreenshot(url, i, true); // true = usar Playwright
-      resultados.push(resultado);
-    }
-    
-    return resultados;
-  }
-
-  /**
-   * Captura screenshots usando capture-website (para otros sitios)
-   */
-  async capturarConCaptureWebsite(urls) {
-    const resultados = [];
-    
-    for (let i = 0; i < urls.length; i++) {
-      const url = urls[i];
-      const resultado = await this.screenshotService.capturarScreenshot(url, i, false); // false = usar capture-website
-      resultados.push(resultado);
-    }
-    
-    return resultados;
-  }
-
-  /**
-   * Combina resultados de datos y screenshots
-   */
-  combinarResultados(urls, datos, screenshots, tipo) {
-    const resultados = [];
-    
-    for (let i = 0; i < urls.length; i++) {
-      const url = urls[i];
-      const dato = datos[i] || { exito: false };
-      const screenshot = screenshots[i] || { exito: false };
+      console.log(chalk.cyan(`📘 Validando autenticación de Facebook (${urlsFacebook.length} URLs)...`));
       
-      resultados.push({
+      if (!this.screenshotService.loginRealizado.facebook) {
+        erroresAutenticacion.push(`❌ Facebook NO está autenticado pero hay ${urlsFacebook.length} URLs de Facebook`);
+      } else {
+        console.log(chalk.green(`✅ Facebook autenticado correctamente`));
+      }
+    } else {
+      console.log(chalk.gray(`📘 Facebook: Sin URLs, validación omitida`));
+    }
+    
+    // Validar Instagram si hay URLs de Instagram
+    if (urlsInstagram.length > 0) {
+      console.log(chalk.cyan(`📱 Validando autenticación de Instagram (${urlsInstagram.length} URLs)...`));
+      
+      if (!this.screenshotService.loginRealizado.instagram) {
+        erroresAutenticacion.push(`❌ Instagram NO está autenticado pero hay ${urlsInstagram.length} URLs de Instagram`);
+      } else {
+        console.log(chalk.green(`✅ Instagram autenticado correctamente`));
+      }
+    } else {
+      console.log(chalk.gray(`📱 Instagram: Sin URLs, validación omitida`));
+    }
+    
+    // Si hay errores de autenticación, detener la ejecución
+    if (erroresAutenticacion.length > 0) {
+      console.log(chalk.red('\n🚨 ERRORES CRÍTICOS DE AUTENTICACIÓN:'));
+      erroresAutenticacion.forEach(error => console.log(chalk.red(`  ${error}`)));
+      
+      console.log(chalk.yellow('\n💡 SOLUCIONES:'));
+      if (urlsFacebook.length > 0 && !this.screenshotService.loginRealizado.facebook) {
+        console.log(chalk.yellow('  📘 Facebook: Verificar credenciales en FACEBOOK_CREDENTIALS'));
+      }
+      if (urlsInstagram.length > 0 && !this.screenshotService.loginRealizado.instagram) {
+        console.log(chalk.yellow('  📱 Instagram: Verificar credenciales en INSTAGRAM_CREDENTIALS'));
+      }
+      
+      console.log(chalk.red('\n🛑 DETENIENDO EJECUCIÓN - No se pueden procesar URLs sin autenticación\n'));
+      
+      // Lanzar error para detener todo el proceso
+      throw new Error('Autenticación requerida fallida: ' + erroresAutenticacion.join(', '));
+    }
+    
+    console.log(chalk.green('✅ Todas las autenticaciones requeridas están correctas\n'));
+  }
+
+  /**
+   * Procesa una URL individual solo para screenshot
+   */
+  async procesarUrlParaScreenshot(url) {
+    const tipo = this.determinarTipoUrl(url);
+    
+    try {
+      console.log(chalk.gray(`📸 Capturando: ${url}`));
+      
+      // Solo capturar screenshot
+      const screenshot = await this.screenshotService.capturarScreenshot(url, 0, true);
+      
+      return {
         url,
         tipo,
-        exito: dato.exito || screenshot.exito,
-        datos: dato,
-        screenshot: screenshot,
+        exito: screenshot.exito,
+        screenshot,
+        datos: null, // No extraemos datos
         timestamp: new Date().toISOString()
-      });
+      };
+      
+    } catch (error) {
+      console.log(chalk.red(`❌ Error capturando ${url}: ${error.message}`));
+      
+      return {
+        url,
+        tipo,
+        exito: false,
+        screenshot: {
+          exito: false,
+          error: error.message,
+          tipoError: 'screenshot_error'
+        },
+        datos: null,
+        timestamp: new Date().toISOString()
+      };
     }
-    
-    return resultados;
   }
 
   /**
-   * Extrae el username de una URL de Instagram
+   * Determina el tipo de URL (instagram, facebook, otro)
    */
-  extraerUsername(url) {
-    const match = url.match(/instagram\.com\/([^\/\?]+)/);
-    return match ? match[1] : null;
+  determinarTipoUrl(url) {
+    if (this.esUrlInstagram(url)) {
+      return 'instagram';
+    } else if (this.esUrlFacebook(url)) {
+      return 'facebook';
+    } else {
+      return 'otro';
+    }
   }
 
-  /**
-   * Extrae el post ID de una URL de Instagram
-   */
-  extraerPostId(url) {
-    const match = url.match(/instagram\.com\/p\/([^\/\?]+)/);
-    return match ? match[1] : null;
-  }
 
-  /**
-   * Extrae el nombre de la página de una URL de Facebook
-   */
-  extraerPageName(url) {
-    const match = url.match(/facebook\.com\/([^\/\?]+)/);
-    return match ? match[1] : null;
-  }
 
   /**
    * Verifica si una URL es de Instagram

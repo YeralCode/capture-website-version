@@ -77,6 +77,10 @@ class IntegratedScrapingAutomation {
 
       spinner.succeed('✅ Servicios integrados inicializados correctamente');
       
+      // 🔐 INICIALIZAR SESIONES DE FACEBOOK E INSTAGRAM
+      console.log(chalk.blue('\n🔐 PREPARANDO SESIONES DE AUTENTICACIÓN...\n'));
+      await this.inicializarSesionesCompletas();
+      
       // Mostrar configuración
       this.mostrarConfiguracion();
       
@@ -84,6 +88,30 @@ class IntegratedScrapingAutomation {
       spinner.fail('❌ Error al inicializar servicios');
       console.error(chalk.red(error.message));
       throw error;
+    }
+  }
+
+  /**
+   * Inicializa las sesiones de Facebook e Instagram antes del procesamiento
+   */
+  async inicializarSesionesCompletas() {
+    const spinner = ora('🔐 Iniciando sesiones de Facebook e Instagram...').start();
+    
+    try {
+      // Usar el método específico de inicialización completa del servicio integrado
+      await this.integratedService.inicializar();
+      
+      spinner.succeed('✅ Sesiones de Facebook e Instagram listas');
+      console.log(chalk.green('🎉 ¡Ambas plataformas autenticadas!'));
+      console.log(chalk.cyan('📘 Facebook: Autenticado con credenciales principales'));
+      console.log(chalk.cyan('📱 Instagram: Autenticado directamente (sin Facebook Connect)'));
+      console.log(chalk.cyan('🚀 Las capturas irán directamente al contenido sin mostrar login'));
+      console.log(chalk.cyan('🔄 Las sesiones se mantendrán durante todo el proceso\n'));
+      
+    } catch (error) {
+      spinner.fail('❌ Error al inicializar sesiones');
+      console.log(chalk.yellow('⚠️ Continuando sin autenticación completa...'));
+      console.log(chalk.gray('Las capturas de Facebook/Instagram pueden mostrar pantallas de login\n'));
     }
   }
 
@@ -109,6 +137,9 @@ class IntegratedScrapingAutomation {
       const urlsFinales = this.configuracion.red.validarUrls ? 
         await this.validarUrls(urls) : urls;
 
+      // Paso 2.5: Mostrar análisis de URLs y autenticación requerida
+      await this.analizarUrlsYAutenticacion(urlsFinales);
+
       // Paso 3: Procesar URLs con scraping y capturas
       const resultados = await this.procesarUrls(urlsFinales);
 
@@ -121,7 +152,17 @@ class IntegratedScrapingAutomation {
     } catch (error) {
       console.error(chalk.red('\n❌ Error durante la ejecución:'), error.message);
       
-      if (this.configuracion.logging.nivel === 'debug') {
+      // Error específico de autenticación
+      if (error.message.includes('Autenticación requerida fallida')) {
+        console.log(chalk.red('\n🚨 PROBLEMA DE AUTENTICACIÓN DETECTADO'));
+        console.log(chalk.yellow('💡 ACCIONES RECOMENDADAS:'));
+        console.log(chalk.yellow('  1. Verificar que las credenciales estén correctas'));
+        console.log(chalk.yellow('  2. Verificar conexión a internet'));
+        console.log(chalk.yellow('  3. Revisar si Facebook/Instagram requieren verificación adicional'));
+        console.log(chalk.yellow('  4. Intentar ejecutar solo con URLs normales (sin FB/IG)'));
+      }
+      
+      if (this.configuracion?.logging?.nivel === 'debug') {
         console.error(chalk.gray(error.stack));
       }
       
@@ -151,7 +192,7 @@ class IntegratedScrapingAutomation {
         // 'urls_prueba.txt',
         '289_perfiles_redes_sociales_10_12_2024.txt',
         '1203_SITIOS_WEB_11_2024.txt',   // URLs principales de prueba
-        '2415 sitios web_dic_2024.txt'
+        // '2415 sitios web_dic_2024.txt'
         // 'urls_prueba_test.txt'        // URLs de prueba (primeras 5)
       ];
 
@@ -188,10 +229,56 @@ class IntegratedScrapingAutomation {
   }
 
   /**
-   * Procesa URLs con scraping y capturas
+   * Analiza las URLs y verifica si la autenticación es suficiente
+   */
+  async analizarUrlsYAutenticacion(urls) {
+    console.log(chalk.blue('\n🔍 ANÁLISIS DE URLs Y AUTENTICACIÓN REQUERIDA\n'));
+    
+    // Categorizar URLs
+    const urlsInstagram = urls.filter(url => url.includes('instagram.com'));
+    const urlsFacebook = urls.filter(url => url.includes('facebook.com'));
+    const urlsOtros = urls.filter(url => !url.includes('instagram.com') && !url.includes('facebook.com'));
+    
+    // Mostrar resumen
+    console.log(chalk.cyan('📊 RESUMEN DE URLs:'));
+    console.log(chalk.gray(`  📱 Instagram: ${urlsInstagram.length} URLs`));
+    console.log(chalk.gray(`  📘 Facebook: ${urlsFacebook.length} URLs`));
+    console.log(chalk.gray(`  🌐 Otros sitios: ${urlsOtros.length} URLs`));
+    console.log(chalk.gray(`  📋 Total: ${urls.length} URLs\n`));
+    
+    // Verificar autenticación requerida
+    let requiereValidacion = false;
+    
+    if (urlsFacebook.length > 0 || urlsInstagram.length > 0) {
+      console.log(chalk.yellow('🔐 AUTENTICACIÓN REQUERIDA:'));
+      
+      if (urlsFacebook.length > 0) {
+        console.log(chalk.yellow(`  📘 Facebook: Requerido para ${urlsFacebook.length} URLs`));
+        requiereValidacion = true;
+      }
+      
+      if (urlsInstagram.length > 0) {
+        console.log(chalk.yellow(`  📱 Instagram: Requerido para ${urlsInstagram.length} URLs`));
+        requiereValidacion = true;
+      }
+      
+      console.log(chalk.blue('\n🔄 La validación de autenticación se realizará antes del procesamiento...'));
+    } else {
+      console.log(chalk.green('✅ No se requiere autenticación especial (solo URLs normales)'));
+    }
+    
+    if (urlsOtros.length > 0) {
+      console.log(chalk.cyan(`🌐 URLs normales: ${urlsOtros.length} se procesarán directamente\n`));
+    }
+  }
+
+  /**
+   * Procesa URLs con scraping y capturas (las sesiones ya están iniciadas)
    */
   async procesarUrls(urls) {
-    console.log(chalk.blue('\n🔄 PROCESANDO URLs CON SCRAPING Y CAPTURAS\n'));
+    console.log(chalk.blue('\n📸 PROCESANDO URLs CON SESIONES PRE-AUTENTICADAS\n'));
+    console.log(chalk.cyan('🔐 Facebook e Instagram ya están autenticados'));
+    console.log(chalk.cyan('⚡ Las capturas serán más rápidas sin login repetido\n'));
     
     const resultados = await this.integratedService.procesarUrls(urls);
 
@@ -283,18 +370,16 @@ class IntegratedScrapingAutomation {
    */
   mostrarConfiguracion() {
     console.log(chalk.cyan('\n⚙️ CONFIGURACIÓN INTEGRADA:'));
-    console.log(chalk.gray(`  • Instagram: Scraping + Screenshots`));
-    console.log(chalk.gray(`  • Facebook: Scraping + Screenshots`));
-    console.log(chalk.gray(`  • Otros sitios: Solo Screenshots con Puppeteer`));
-    console.log(chalk.gray(`  • Instagram comentarios: ${this.configuracion.scraping.incluirComentarios ? 'Sí' : 'No'}`));
-    console.log(chalk.gray(`  • Facebook reacciones: ${this.configuracion.scraping.incluirReacciones ? 'Sí' : 'No'}`));
-    console.log(chalk.gray(`  • Max posts: ${this.configuracion.scraping.maxPosts}`));
+    console.log(chalk.green(`  🔐 Autenticación: Facebook + Instagram iniciadas automáticamente`));
+    console.log(chalk.green(`  📸 Capturas: Con barra de navegador real visible`));
+    console.log(chalk.gray(`  • Instagram: Screenshots con login directo`));
+    console.log(chalk.gray(`  • Facebook: Screenshots con sesión pre-autenticada`));
+    console.log(chalk.gray(`  • Otros sitios: Screenshots directas`));
     console.log(chalk.gray(`  • Resolución: ${this.configuracion.screenshots.width}x${this.configuracion.screenshots.height}`));
     console.log(chalk.gray(`  • Timeout: ${this.configuracion.screenshots.timeout}s`));
     console.log(chalk.gray(`  • Concurrencia: ${this.configuracion.screenshots.concurrencia}`));
-    console.log(chalk.gray(`  • Directorio datos: ${this.configuracion.scraping.directorioSalida}`));
-    console.log(chalk.gray(`  • Directorio screenshots: ${this.configuracion.archivos.directorioScreenshots}`));
-    console.log(chalk.gray(`  • Directorio output: ${this.configuracion.archivos.directorioOutput}`));
+    console.log(chalk.gray(`  • Directorio screenshots: ${this.configuracion.archivos?.directorioScreenshots || 'screenshots'}`));
+    console.log(chalk.gray(`  • Directorio output: ${this.configuracion.archivos?.directorioOutput || 'output'}`));
   }
 
   /**

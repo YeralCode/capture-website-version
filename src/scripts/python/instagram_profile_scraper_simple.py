@@ -319,15 +319,15 @@ def extraer_perfil_instagram_simple(parametros):
         if meta_desc and meta_desc.get('content'):
             descripcion = meta_desc.get('content')
             if not datos_perfil['descripcion']:  # Solo si no tenemos descripción ya
-                datos_perfil['descripcion'] = descripcion
+            datos_perfil['descripcion'] = descripcion
             
                         # Intentar extraer números de seguidores, seguidos, posts (solo si no los tenemos)
             if datos_perfil['seguidores'] == 'N/A':
-                numeros = re.findall(r'([\d,]+)', descripcion)
-                if len(numeros) >= 3:
-                    datos_perfil['seguidores'] = numeros[0]
-                    datos_perfil['seguidos'] = numeros[1] 
-                    datos_perfil['posts'] = numeros[2]
+            numeros = re.findall(r'([\d,]+)', descripcion)
+            if len(numeros) >= 3:
+                datos_perfil['seguidores'] = numeros[0]
+                datos_perfil['seguidos'] = numeros[1] 
+                datos_perfil['posts'] = numeros[2]
         
             # Intentar extraer biografía y verificar si el usuario existe (solo si no hay login)
         script_tags = soup.find_all('script', type='application/ld+json')
