@@ -229,8 +229,14 @@ async def realizar_login_playwright(page):
         # Hacer click en el botón de login
         await page.click('button[name="login"], input[type="submit"]')
         
-        # Esperar respuesta
-        await page.wait_for_timeout(5000)
+        # ⏰ ESPERA EXTENDIDA DE 60 SEGUNDOS PARA INTERVENCIÓN MANUAL
+        print("⏰ Esperando 60 segundos para permitir intervención manual (captcha, verificación, etc.)...")
+        print("   Si necesitas resolver un captcha o verificación, hazlo ahora.")
+        
+        for i in range(60, 0, -1):
+            print(f"\r   ⏳ Tiempo restante: {i} segundos...", end='', flush=True)
+            await page.wait_for_timeout(1000)
+        print("\n")
         
         # Verificar si el login fue exitoso
         current_url = page.url

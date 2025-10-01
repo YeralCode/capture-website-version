@@ -52,10 +52,10 @@ export class IntegratedScrapingService {
   }
 
   /**
-   * Procesa URLs solo para capturas de pantalla (con sesiones pre-autenticadas)
+   * Procesa URLs solo para capturas de pantalla (con sesiones pre-autenticadas) - OPTIMIZADO
    */
   async procesarUrls(urls) {
-    console.log(chalk.blue('\n📸 PROCESANDO URLs CON SESIONES PRE-AUTENTICADAS\n'));
+    console.log(chalk.blue('\n🚀 PROCESANDO URLs CON SESIONES PRE-AUTENTICADAS (MODO OPTIMIZADO)\n'));
     
     // Categorizar URLs para mostrar información
     const urlsInstagram = urls.filter(url => this.esUrlInstagram(url));
@@ -69,15 +69,146 @@ export class IntegratedScrapingService {
     // 🔐 VALIDAR AUTENTICACIÓN CRÍTICA
     await this.validarAutenticacionRequerida(urlsFacebook, urlsInstagram);
 
-    console.log(chalk.green(`🚀 Validación exitosa - procediendo con las capturas`));
-    console.log(chalk.yellow(`✨ Todas las capturas incluyen barra de navegador real`));
+    console.log(chalk.green(`✅ Validación exitosa - iniciando procesamiento optimizado`));
+    console.log(chalk.yellow(`⚡ Procesamiento en paralelo + Cache + Agrupación inteligente`));
 
+    // 🚀 PROCESAMIENTO OPTIMIZADO EN PARALELO
+    const resultados = await this.procesarUrlsOptimizado(urls);
+
+    return resultados;
+  }
+
+  /**
+   * Procesamiento optimizado con paralelización y agrupación inteligente
+   */
+  async procesarUrlsOptimizado(urls) {
+    const inicioTotal = Date.now();
+    console.log(chalk.blue('\n⚡ INICIANDO PROCESAMIENTO OPTIMIZADO...\n'));
+
+    // 1. Agrupar URLs por dominio para optimizar navegación
+    const gruposPorDominio = this.agruparUrlsPorDominio(urls);
+    
+    // 2. Configurar paralelización inteligente
+    const maxConcurrencia = Math.min(3, Math.ceil(urls.length / 5)); // Máximo 3 procesos paralelos
+    console.log(chalk.cyan(`🔧 Configuración: ${maxConcurrencia} procesos paralelos`));
+
+    // 3. Procesar grupos en paralelo
     const resultados = [];
+    const gruposArray = Array.from(gruposPorDominio.entries());
+    
+    for (let i = 0; i < gruposArray.length; i += maxConcurrencia) {
+      const loteGrupos = gruposArray.slice(i, i + maxConcurrencia);
+      
+      console.log(chalk.blue(`\n📦 Procesando lote ${Math.floor(i/maxConcurrencia) + 1} con ${loteGrupos.length} dominios...`));
+      
+      // Procesar grupos del lote en paralelo
+      const promesasLote = loteGrupos.map(([dominio, urlsGrupo]) => 
+        this.procesarGrupoDominio(dominio, urlsGrupo)
+      );
+      
+      const resultadosLote = await Promise.allSettled(promesasLote);
+      
+      // Consolidar resultados
+      for (const resultado of resultadosLote) {
+        if (resultado.status === 'fulfilled') {
+          resultados.push(...resultado.value);
+        } else {
+          console.error(chalk.red(`❌ Error en lote: ${resultado.reason}`));
+        }
+      }
+      
+      // Mostrar progreso
+      const urlsProcesadas = resultados.length;
+      const porcentajeTotal = Math.round((urlsProcesadas / urls.length) * 100);
+      console.log(chalk.green(`✅ Progreso total: ${urlsProcesadas}/${urls.length} (${porcentajeTotal}%)`));
+    }
 
-    // Procesar todas las URLs solo para screenshots
+    const tiempoTotal = ((Date.now() - inicioTotal) / 1000).toFixed(2);
+    console.log(chalk.green(`\n🎉 PROCESAMIENTO COMPLETADO en ${tiempoTotal}s`));
+    console.log(chalk.cyan(`📊 Velocidad promedio: ${(urls.length / tiempoTotal).toFixed(1)} URLs/segundo`));
+
+    return resultados;
+  }
+
+  /**
+   * Agrupa URLs por dominio para optimizar la navegación
+   */
+  agruparUrlsPorDominio(urls) {
+    const grupos = new Map();
+    
     for (const url of urls) {
+      try {
+        const urlObj = new URL(url);
+        const dominio = urlObj.hostname;
+        
+        if (!grupos.has(dominio)) {
+          grupos.set(dominio, []);
+        }
+        grupos.get(dominio).push(url);
+      } catch (error) {
+        // URL inválida, crear grupo especial
+        if (!grupos.has('urls-invalidas')) {
+          grupos.set('urls-invalidas', []);
+        }
+        grupos.get('urls-invalidas').push(url);
+      }
+    }
+    
+    // Mostrar agrupación
+    console.log(chalk.cyan('\n📂 AGRUPACIÓN POR DOMINIO:'));
+    for (const [dominio, urlsGrupo] of grupos) {
+      console.log(chalk.gray(`  ${dominio}: ${urlsGrupo.length} URLs`));
+    }
+    
+    return grupos;
+  }
+
+  /**
+   * Procesa todas las URLs de un dominio específico de forma optimizada
+   */
+  async procesarGrupoDominio(dominio, urlsGrupo) {
+    const inicioGrupo = Date.now();
+    console.log(chalk.blue(`\n🌐 Procesando dominio: ${dominio} (${urlsGrupo.length} URLs)`));
+    
+    const resultados = [];
+    
+    try {
+      // Procesar URLs del mismo dominio secuencialmente para reutilizar contexto
+      for (let i = 0; i < urlsGrupo.length; i++) {
+        const url = urlsGrupo[i];
+        const numero = i + 1;
+        
+        console.log(chalk.gray(`  [${numero}/${urlsGrupo.length}] ${dominio}: Procesando...`));
+        
+        try {
       const resultado = await this.procesarUrlParaScreenshot(url);
       resultados.push(resultado);
+          
+          console.log(chalk.green(`  ✅ [${numero}/${urlsGrupo.length}] ${dominio}: Completado`));
+          
+        } catch (error) {
+          console.error(chalk.red(`  ❌ [${numero}/${urlsGrupo.length}] ${dominio}: ${error.message}`));
+          
+          resultados.push({
+            url: url,
+            tipo: this.determinarTipoUrl(url),
+            exito: false,
+            screenshot: {
+              exito: false,
+              error: error.message,
+              tipoError: 'screenshot_error'
+            },
+            datos: null,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+      
+      const tiempoGrupo = ((Date.now() - inicioGrupo) / 1000).toFixed(2);
+      console.log(chalk.green(`✅ Dominio ${dominio} completado en ${tiempoGrupo}s`));
+      
+    } catch (error) {
+      console.error(chalk.red(`❌ Error crítico en dominio ${dominio}: ${error.message}`));
     }
 
     return resultados;

@@ -66,7 +66,20 @@ config/auth.json
 *.pem
 *.crt
 
+# Sesiones guardadas (cookies de Facebook/Instagram)
+sesiones/
+*_cookies.json
+
 # Archivos de Playwright
 test-results/
 playwright-report/
 playwright/.cache/
+
+test_url.txt
+
+# Archivos de prueba específicos
+test-sesiones.js
+src/test-instagram-login.mjs
+
+# Carpetas de salida temporales de pruebas
+screenshots/temp_instagram_test/

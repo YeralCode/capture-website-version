@@ -5,6 +5,7 @@ import { join } from 'path';
 import chalk from 'chalk';
 import ora from 'ora';
 import { execSync } from 'child_process';
+import { existsSync } from 'fs';
 
 /**
  * Credenciales para login automático en Facebook
@@ -22,8 +23,60 @@ const INSTAGRAM_CREDENTIALS = {
   password: "6897861Yps@"
 };
 
+/**ea 1 minuto desp
+ * Rutas para guardar cookies de sesión persistentes
+ */
+const COOKIES_DIR = join(process.cwd(), 'sesiones');
+const FACEBOOK_COOKIES_FILE = join(COOKIES_DIR, 'facebook_cookies.json');
+const INSTAGRAM_COOKIES_FILE = join(COOKIES_DIR, 'instagram_cookies.json');
+
 /**
- * Realiza login automático en Facebook usando las credenciales - VERSIÓN PERSISTENTE
+ * Guarda las cookies de una sesión en un archivo
+ */
+async function guardarCookies(context, archivo) {
+  try {
+    // Crear directorio si no existe
+    await fs.mkdir(COOKIES_DIR, { recursive: true });
+    
+    // Obtener cookies del contexto
+    const cookies = await context.cookies();
+    
+    // Guardar cookies en archivo JSON
+    await fs.writeFile(archivo, JSON.stringify(cookies, null, 2));
+    console.log(`✅ Cookies guardadas en: ${archivo}`);
+    return true;
+  } catch (error) {
+    console.log(`⚠️ Error guardando cookies: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Carga cookies desde un archivo al contexto
+ */
+async function cargarCookies(context, archivo) {
+  try {
+    if (!existsSync(archivo)) {
+      console.log(`📝 No se encontraron cookies guardadas en: ${archivo}`);
+      return false;
+    }
+    
+    // Leer cookies del archivo
+    const cookiesData = await fs.readFile(archivo, 'utf-8');
+    const cookies = JSON.parse(cookiesData);
+    
+    // Agregar cookies al contexto
+    await context.addCookies(cookies);
+    console.log(`✅ Cookies cargadas desde: ${archivo}`);
+    return true;
+  } catch (error) {
+    console.log(`⚠️ Error cargando cookies: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Realiza login automático en Facebook usando las credenciales - VERSIÓN PERSISTENTE CON ESPERA EXTENDIDA
  */
 async function realizarLoginFacebookPersistente(page) {
   try {
@@ -120,15 +173,15 @@ async function realizarLoginFacebookPersistente(page) {
       await page.keyboard.press('Enter');
     }
     
-    // Esperar navegación después del login
-    console.log('⏳ Esperando respuesta del login...');
-    try {
-      await page.waitForNavigation({ timeout: 10000, waitUntil: 'domcontentloaded' });
-    } catch {
-      console.log('⚠️ Timeout en navegación, verificando URL actual...');
-    }
+    // ⏰ ESPERA EXTENDIDA DE 60 SEGUNDOS PARA INTERVENCIÓN MANUAL
+    console.log(chalk.yellow('⏰ Esperando 60 segundos para permitir intervención manual (captcha, verificación, etc.)...'));
+    console.log(chalk.cyan('   Si necesitas resolver un captcha o verificación, hazlo ahora.'));
     
-    await page.waitForTimeout(3000);
+    for (let i = 60; i > 0; i--) {
+      process.stdout.write(`\r   ⏳ Tiempo restante: ${i} segundos...`);
+      await page.waitForTimeout(1000);
+    }
+    console.log('\n');
     
     // Verificar si el login fue exitoso
     const currentUrl = page.url();
@@ -162,17 +215,21 @@ async function realizarLoginFacebookPersistente(page) {
     
     if (loginCompletamenteExitoso && !loginFallo) {
       console.log('✅ Login de Facebook completamente exitoso - acceso completo');
+      
+      // 💾 Guardar cookies para reutilizar en futuras sesiones
+      await guardarCookies(page.context(), FACEBOOK_COOKIES_FILE);
+      
       return true;
     } else if (requiereVerificacion) {
       console.log('⚠️ Facebook requiere verificación de dos pasos - login parcial');
       console.log('🔄 Continuando sin verificación completa...');
-      return false; // Retornar false para que tome screenshot de la página de verificación
+      return false;
     } else if (loginFallo) {
       console.log('❌ Login de Facebook falló - aún en página de login');
       return false;
     } else {
       console.log('🔄 Estado de login incierto, asumiendo fallo para mejor captura');
-      return false; // Cambiar a false para ser más conservador
+      return false;
     }
     
   } catch (error) {
@@ -182,7 +239,7 @@ async function realizarLoginFacebookPersistente(page) {
 }
 
 /**
- * Realiza login directo en Instagram con credenciales específicas
+ * Realiza login directo en Instagram con credenciales específicas - CON ESPERA EXTENDIDA
  */
 async function realizarLoginInstagramDirecto(page) {
   try {
@@ -210,8 +267,15 @@ async function realizarLoginInstagramDirecto(page) {
     console.log('🚀 Enviando credenciales de Instagram...');
     await page.click('button[type="submit"]');
     
-    // Esperar respuesta
-    await page.waitForTimeout(3000);
+    // ⏰ ESPERA EXTENDIDA DE 60 SEGUNDOS PARA INTERVENCIÓN MANUAL
+    console.log(chalk.yellow('⏰ Esperando 60 segundos para permitir intervención manual (captcha, verificación, etc.)...'));
+    console.log(chalk.cyan('   Si necesitas resolver un captcha o verificación, hazlo ahora.'));
+    
+    for (let i = 60; i > 0; i--) {
+      process.stdout.write(`\r   ⏳ Tiempo restante: ${i} segundos...`);
+      await page.waitForTimeout(1000);
+    }
+    console.log('\n');
     
     // Verificar si el login fue exitoso
     const currentUrl = page.url();
@@ -243,6 +307,9 @@ async function realizarLoginInstagramDirecto(page) {
         // Ignorar errores al saltar verificaciones
       }
       
+      // 💾 Guardar cookies para reutilizar en futuras sesiones
+      await guardarCookies(page.context(), INSTAGRAM_COOKIES_FILE);
+      
       return true;
     } else if (currentUrl.includes('challenge')) {
       console.log('⚠️ Instagram requiere verificación de seguridad');
@@ -257,8 +324,6 @@ async function realizarLoginInstagramDirecto(page) {
     return false;
   }
 }
-
-
 
 /**
  * Configuración por defecto para las capturas de pantalla
@@ -474,7 +539,38 @@ export class ScreenshotService {
     }
 
     try {
-      console.log('🔑 Realizando login inicial en Facebook...');
+      console.log('🔑 Iniciando autenticación de Facebook...');
+      
+      // 🍪 PRIMERO: Intentar cargar cookies guardadas
+      const cookiesCargadas = await cargarCookies(this.sessionContext, FACEBOOK_COOKIES_FILE);
+      
+      if (cookiesCargadas) {
+        console.log(chalk.green('🎉 Usando sesión guardada de Facebook (sin necesidad de login)'));
+        
+        // Verificar que la sesión sigue válida
+        const paginaTest = await this.sessionContext.newPage();
+        await paginaTest.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded' });
+        await paginaTest.waitForTimeout(3000);
+        
+        const urlActual = paginaTest.url();
+        const contenido = await paginaTest.content();
+        const sesionValida = !urlActual.includes('login') && 
+                            !contenido.includes('name="email"') &&
+                            !contenido.includes('Iniciar sesión en Facebook');
+        
+        await paginaTest.close();
+        
+        if (sesionValida) {
+          console.log(chalk.green('✅ Sesión de Facebook válida y reutilizada'));
+          this.loginRealizado.facebook = true;
+          return true;
+        } else {
+          console.log(chalk.yellow('⚠️ Sesión guardada expiró, realizando nuevo login...'));
+        }
+      }
+      
+      // Si no hay cookies o expiraron, realizar login normal
+      console.log('🔐 Realizando login manual en Facebook...');
       const paginaFacebook = await this.sessionContext.newPage();
       
       const loginExitoso = await realizarLoginFacebookPersistente(paginaFacebook);
@@ -507,9 +603,42 @@ export class ScreenshotService {
     }
 
     try {
-      console.log('📱 Realizando login directo en Instagram...');
+      console.log('📱 Iniciando autenticación de Instagram...');
       
-      // Crear una página temporal para el proceso de Instagram
+      // 🍪 PRIMERO: Intentar cargar cookies guardadas
+      const cookiesCargadas = await cargarCookies(this.sessionContext, INSTAGRAM_COOKIES_FILE);
+      
+      if (cookiesCargadas) {
+        console.log(chalk.green('🎉 Usando sesión guardada de Instagram (sin necesidad de login)'));
+        
+        // Verificar que la sesión sigue válida
+        const paginaTest = await this.sessionContext.newPage();
+        await paginaTest.goto('https://www.instagram.com', { waitUntil: 'domcontentloaded' });
+        await paginaTest.waitForTimeout(3000);
+        
+        const urlActual = paginaTest.url();
+        const contenido = await paginaTest.content(); // Añadido para verificar contenido
+        const sesionValida = !urlActual.includes('accounts/login') && 
+                            !urlActual.includes('login') &&
+                            !contenido.includes('name="username"') && // Campo de usuario
+                            !contenido.includes('name="password"') && // Campo de contraseña
+                            !contenido.includes('Iniciar sesión') && // Texto de botón/enlace
+                            !contenido.includes('Log in') && // Texto de botón/enlace en inglés
+                            !contenido.includes('Teléfono, usuario o correo electrónico'); // Placeholder de usuario
+        
+        await paginaTest.close();
+        
+        if (sesionValida) {
+          console.log(chalk.green('✅ Sesión de Instagram válida y reutilizada'));
+          this.loginRealizado.instagram = true;
+          return true;
+        } else {
+          console.log(chalk.yellow('⚠️ Sesión guardada expiró, realizando nuevo login...'));
+        }
+      }
+      
+      // Si no hay cookies o expiraron, realizar login normal
+      console.log('🔐 Realizando login manual en Instagram...');
       const paginaInstagram = await this.sessionContext.newPage();
       
       // Login directo con credenciales específicas de Instagram
