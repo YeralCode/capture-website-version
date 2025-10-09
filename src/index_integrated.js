@@ -194,8 +194,8 @@ class IntegratedScrapingAutomation {
         // 'urls_test_login.txt',        // URLs de prueba para login
         // 'urls_test_final.txt'        // URLs de prueba final
         // 'urls_prueba.txt',
-        '289_perfiles_redes_sociales_10_12_2024.txt',
-        '1203_SITIOS_WEB_11_2024.txt',   // URLs principales de prueba
+        '289_perfiles_redes_sociales_10_12_2024_LIMPIO.txt',
+        // '1203_SITIOS_WEB_11_2024.txt',   // URLs principales de prueba
         // '2415 sitios web_dic_2024.txt'
         // 'urls_prueba_test.txt'        // URLs de prueba (primeras 5)
       ];

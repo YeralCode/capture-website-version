@@ -43,11 +43,42 @@ def guardar_sesion(session):
 
 def cargar_sesion():
     """
-    Carga las cookies de la sesión desde un archivo pickle
+    Carga las cookies de la sesión desde un archivo pickle O desde Playwright (JSON)
     """
     try:
+        # PRIORIDAD 1: Cookies de Playwright (JSON) - más recientes y confiables
+        playwright_cookies_file = os.path.join(os.getcwd(), 'sesiones', 'facebook_cookies.json')
+        if os.path.exists(playwright_cookies_file):
+            print(f"🔄 Cargando cookies de Playwright (JSON)...")
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,es;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            
+            # Cargar cookies JSON de Playwright
+            with open(playwright_cookies_file, 'r') as f:
+                playwright_cookies = json.load(f)
+                
+            # Convertir cookies de Playwright a formato requests
+            for cookie in playwright_cookies:
+                session.cookies.set(
+                    name=cookie.get('name'),
+                    value=cookie.get('value'),
+                    domain=cookie.get('domain'),
+                    path=cookie.get('path', '/')
+                )
+            
+            print("✅ Cookies de Playwright cargadas exitosamente")
+            return session
+        
+        # PRIORIDAD 2: Sesión pickle (fallback)
         if os.path.exists(ARCHIVO_SESION):
-            print(f"🔄 Cargando sesión guardada de Facebook...")
+            print(f"🔄 Cargando sesión pickle guardada...")
             session = requests.Session()
             session.headers.update({
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -61,11 +92,11 @@ def cargar_sesion():
             with open(ARCHIVO_SESION, 'rb') as f:
                 session.cookies.update(pickle.load(f))
             
-            print("✅ Sesión de Facebook cargada exitosamente")
+            print("✅ Sesión pickle cargada exitosamente")
             return session
-        else:
-            print("📝 No se encontró sesión guardada")
-            return None
+        
+        print("📝 No se encontró ninguna sesión guardada")
+        return None
     except Exception as e:
         print(f"⚠️ Error al cargar sesión: {str(e)}")
         return None
@@ -79,18 +110,32 @@ def verificar_sesion_valida(session):
         # Intentar acceder a una página que requiere autenticación
         response = session.get('https://www.facebook.com/', timeout=10)
         
-        # Verificar si estamos autenticados
-        es_login = (
-            'login' in response.url.lower() or
-            'iniciar sesión' in response.text.lower()[:1000] or
-            'log in' in response.text.lower()[:1000]
+        # Indicadores de que NO estamos autenticados (más específicos)
+        contenido = response.text.lower()
+        es_pagina_login = (
+            '/login' in response.url.lower() or
+            'www.facebook.com/login' in response.url.lower() or
+            ('you must log in' in contenido and 'log into facebook' in contenido) or  # Página específica de login forzado
+            ('name="email"' in contenido and 'name="pass"' in contenido and len(contenido) < 5000)  # Form de login pequeño
         )
         
-        if not es_login and response.status_code == 200:
-            print("✅ Sesión válida - autenticado correctamente")
+        # Indicadores de que SÍ estamos autenticados
+        es_autenticado = (
+            'feed' in response.url.lower() or
+            'home.php' in response.url.lower() or
+            'data-testid="search"' in contenido or
+            'navigation' in contenido[:5000] or
+            'userNavigationLabel' in contenido
+        )
+        
+        if es_autenticado and response.status_code == 200:
+            print("✅ Sesión válida - autenticado correctamente (feed/home detectado)")
+            return True
+        elif not es_pagina_login and response.status_code == 200:
+            print("✅ Sesión válida - no es página de login")
             return True
         else:
-            print("⚠️ Sesión expirada o inválida")
+            print(f"⚠️ Sesión expirada o inválida (URL: {response.url[:50]}...)")
             return False
             
     except Exception as e:
@@ -168,6 +213,7 @@ def extraer_pagina_facebook_simple(parametros):
         max_posts = params.get('maxPosts', 10)
         incluir_comentarios = params.get('incluirComentarios', False)
         incluir_reacciones = params.get('incluirReacciones', True)
+        cookies_desde_js = params.get('cookies', None)  # NUEVO: cookies desde JavaScript
         
         if not page_name:
             raise ValueError("Nombre de página es requerido")
@@ -178,20 +224,51 @@ def extraer_pagina_facebook_simple(parametros):
         # URL de la página
         url_pagina = f"https://www.facebook.com/{page_name}"
         
-        # Intentar cargar sesión guardada primero
-        session = cargar_sesion()
+        # PRIORIDAD 1: Usar cookies desde JavaScript (Playwright) si se proporcionan
+        session = None
         login_exitoso = False
         
-        if session:
-            # Verificar si la sesión es válida
+        if cookies_desde_js:
+            print("🍪 Usando cookies de Playwright (desde JavaScript)...")
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,es;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            
+            # Convertir cookies de Playwright a requests
+            for cookie in cookies_desde_js:
+                session.cookies.set(
+                    name=cookie.get('name'),
+                    value=cookie.get('value'),
+                    domain=cookie.get('domain'),
+                    path=cookie.get('path', '/')
+                )
+            
+            # Verificar si las cookies son válidas
             if verificar_sesion_valida(session):
                 login_exitoso = True
-                print("✅ Usando sesión guardada válida")
+                print("✅ Cookies de Playwright válidas y activas")
             else:
-                print("⚠️ Sesión expirada, realizando nuevo login...")
+                print("⚠️ Cookies de Playwright expiradas")
                 session = None
         
-        # Si no hay sesión válida, crear una nueva y hacer login
+        # PRIORIDAD 2: Intentar cargar sesión guardada
+        if not session:
+            session = cargar_sesion()
+            if session:
+                if verificar_sesion_valida(session):
+                    login_exitoso = True
+                    print("✅ Usando sesión guardada válida")
+                else:
+                    print("⚠️ Sesión expirada, realizando nuevo login...")
+                    session = None
+        
+        # PRIORIDAD 3: Si no hay sesión válida, crear una nueva y hacer login
         if not session:
             print("🔑 Creando nueva sesión de Facebook...")
             session = requests.Session()
@@ -470,8 +547,10 @@ def extraer_pagina_facebook_simple(parametros):
             datos_pagina['pagina_existe'] = False
             datos_pagina['error'] = 'Página no encontrada (404)'
         else:
-            datos_pagina['pagina_existe'] = False
-            datos_pagina['error'] = f'Error HTTP {response.status_code if response else "sin respuesta"}'
+            # Solo marcar como no existe si no se detectó login previamente
+            if not datos_pagina.get('requiere_login', False):
+                datos_pagina['pagina_existe'] = False
+                datos_pagina['error'] = f'Error HTTP {response.status_code if response else "sin respuesta"}'
         
         # Guardar datos en archivo JSON
         archivo_salida = os.path.join(directorio, f'facebook_page_{page_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')

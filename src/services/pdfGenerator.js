@@ -185,7 +185,7 @@ export class PDFGenerator {
     const estadisticas = [
       `Total de URLs procesadas: ${total}`,
       `Bloqueadas/No disponibles: ${bloqueadas}`,
-      `Porcentaje de contenido real: ${porcentajeContenidoReal}%`,
+      `No bloqueadas (accesibles): ${conContenidoReal}`,
       `Fecha de procesamiento: ${new Date().toLocaleDateString('es-ES')}`,
       `Hora de procesamiento: ${new Date().toLocaleTimeString('es-ES')}`,
       '',
@@ -603,12 +603,17 @@ export class PDFGenerator {
    * @returns {string} 'OK' si tiene contenido real, 'No' si no está disponible
    */
   evaluarContenidoConScraping(resultado) {
-    // Si hay evaluación de contenido del servicio integrado, usarla
+    // PRIORIDAD 1: Si hay evaluación de contenido del servicio integrado, usarla
     if (resultado.evaluacionContenido) {
       return resultado.evaluacionContenido.tieneContenido ? 'OK' : 'No';
     }
 
-    // Si ya viene evaluado del scraping, usar ese resultado
+    // PRIORIDAD 2: Si el screenshot es exitoso, considerar OK (página accesible)
+    if (resultado.screenshot && resultado.screenshot.exito) {
+      return 'OK';
+    }
+
+    // PRIORIDAD 3: Si ya viene evaluado del scraping, usar ese resultado
     if (resultado.tieneContenido !== undefined) {
       return resultado.tieneContenido ? 'OK' : 'No';
     }
@@ -666,16 +671,18 @@ export class PDFGenerator {
       if (datos.login_exitoso === true) indicadoresPositivos.push(1);
       if (datos.imagen_perfil_descargada === true) indicadoresPositivos.push(1);
       if (datos.titulo && datos.titulo !== 'Facebook' && datos.titulo.length > 5) indicadoresPositivos.push(1);
-      if (datos.descripcion && !datos.descripcion.includes('requiere autenticación') && datos.descripcion.length > 20) indicadoresPositivos.push(1);
+      if (datos.descripcion && datos.descripcion.length > 20) indicadoresPositivos.push(1);
       if (datos.seguidores && datos.seguidores !== 'N/A') indicadoresPositivos.push(1);
       if (datos.me_gusta && datos.me_gusta !== 'N/A') indicadoresPositivos.push(1);
+      
+      // IMPORTANTE: Si requiere login, la página EXISTE (es privada, no bloqueada)
+      if (datos.requiere_login === true) indicadoresPositivos.push(2); // Peso mayor porque confirma que existe
       
       // Verificar indicadores negativos
       const indicadoresNegativos = [];
       
       if (datos.pagina_existe === false) indicadoresNegativos.push(1);
-      if (datos.requiere_login === true && !datos.login_exitoso) indicadoresNegativos.push(1);
-      if (datos.error) indicadoresNegativos.push(1);
+      if (datos.error && datos.error.includes('404')) indicadoresNegativos.push(1);
       if (datos.codigo_respuesta === 404) indicadoresNegativos.push(1);
       
       // Si tiene más indicadores positivos que negativos, es 'OK'

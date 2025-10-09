@@ -456,7 +456,7 @@ export class ScreenshotService {
   }
 
   /**
-   * Obtiene o crea una única pestaña persistente para toda la sesión
+   * Obtiene o crea una única pestaña persistente para toda la sesión (MODO SECUENCIAL)
    */
   async obtenerPagina() {
     if (this.paginaActiva && !this.paginaActiva.isClosed()) {
@@ -470,6 +470,20 @@ export class ScreenshotService {
       });
     }
     return this.paginaActiva;
+  }
+
+  /**
+   * Crea una nueva página independiente para procesamiento paralelo
+   */
+  async crearPaginaNueva() {
+    const nuevaPagina = await this.sessionContext.newPage();
+    if (!this.configuracion.usarNavegadorReal) {
+      await nuevaPagina.setViewportSize({
+        width: this.configuracion.width,
+        height: this.configuracion.height + 100
+      });
+    }
+    return nuevaPagina;
   }
 
   /**
@@ -771,7 +785,7 @@ export class ScreenshotService {
   /**
    * Captura screenshot usando Playwright - SIEMPRE toma screenshot incluso en errores
    */
-  async capturarConPlaywright(url, rutaCompleta) {
+  async capturarConPlaywright(url, rutaCompleta, usarPaginaNueva = false) {
     if (!this.browser) {
       await this.inicializarPlaywrightConRetry();
     }
@@ -779,13 +793,19 @@ export class ScreenshotService {
     let page;
     let huboError = false;
     let mensajeError = null;
+    let paginaCreada = false; // Flag para saber si cerramos la página al final
     
     try {
       // Normalizar URL (agregar protocolo si no lo tiene)
       const urlNormalizada = this.normalizarUrl(url);
       
-      // Usar una sola página persistente
-      page = await this.obtenerPagina();
+      // Modo paralelo: crear página nueva | Modo secuencial: reutilizar página
+      if (usarPaginaNueva) {
+        page = await this.crearPaginaNueva();
+        paginaCreada = true;
+      } else {
+        page = await this.obtenerPagina();
+      }
       
       // Configurar viewport solo en modo simulado
       if (!this.configuracion.usarNavegadorReal) {
@@ -1168,21 +1188,44 @@ export class ScreenshotService {
       // SIEMPRE tomar screenshot
       if (this.configuracion.usarNavegadorReal) {
         // En navegador real, intentar captura de ventana completa con barra de direcciones
-        console.log('🎯 Navegador real: Intentando capturar ventana completa con barra...');
         
-        // Esperar que la página esté completamente cargada
-        await page.waitForTimeout(2000);
-        
-        // Intentar captura de ventana completa del sistema
-        const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta);
-        
-        if (!capturaExitosa) {
-          console.log('🔄 Captura de sistema falló, usando screenshot normal de Playwright...');
-          await page.screenshot({ 
-            path: rutaCompleta,
-            fullPage: false,
-            type: this.configuracion.format
-          });
+        // MODO PARALELO: traer pestaña al frente y capturar ventana del sistema
+        if (paginaCreada) {
+          console.log('⚡ Semi-paralelo: Trayendo pestaña al frente...');
+          
+          // 1. Traer esta pestaña al frente
+          await page.bringToFront();
+          
+          // 2. Esperar a que el sistema operativo cambie de pestaña visualmente
+          await page.waitForTimeout(2500);
+          
+          // 3. Capturar ventana del sistema (con barra de navegación)
+          console.log('📸 Capturando ventana con barra de navegación...');
+          const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta);
+          
+          if (!capturaExitosa) {
+            console.log('🔄 Captura de sistema falló, usando screenshot de Playwright...');
+            await page.screenshot({ 
+              path: rutaCompleta,
+              fullPage: false,
+              type: this.configuracion.format
+            });
+          }
+        } else {
+          // MODO SECUENCIAL: captura de ventana del sistema con barra
+          console.log('🎯 Navegador real: Intentando capturar ventana completa con barra...');
+          await page.waitForTimeout(2000);
+          
+          const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta);
+          
+          if (!capturaExitosa) {
+            console.log('🔄 Captura de sistema falló, usando screenshot normal de Playwright...');
+            await page.screenshot({ 
+              path: rutaCompleta,
+              fullPage: false,
+              type: this.configuracion.format
+            });
+          }
         }
       } else {
         // En modo simulado, screenshot normal con marco
@@ -1207,7 +1250,15 @@ export class ScreenshotService {
       };
 
     } finally {
-      // No cerrar la página: se reutiliza una única pestaña
+      // Cerrar página solo si fue creada para esta captura (modo paralelo)
+      if (paginaCreada && page && !page.isClosed()) {
+        try {
+          await page.close();
+        } catch (error) {
+          // Ignorar errores al cerrar
+        }
+      }
+      // En modo secuencial, no cerrar la página compartida
     }
   }
 
@@ -1319,8 +1370,13 @@ export class ScreenshotService {
 
   /**
    * Captura un screenshot de una URL - SIEMPRE intenta tomar screenshot
+   * @param {string} url - URL a capturar
+   * @param {number} indice - Índice de la URL
+   * @param {boolean} usarPlaywright - Si true usa Playwright, si false usa capture-website
+   * @param {string} nombreBasePersonalizado - Nombre base personalizado para el archivo
+   * @param {boolean} modoParalelo - Si true crea página nueva para cada captura (paralelo)
    */
-  async capturarScreenshot(url, indice, usarPlaywright = false, nombreBasePersonalizado = null) {
+  async capturarScreenshot(url, indice, usarPlaywright = false, nombreBasePersonalizado = null, modoParalelo = false) {
     const spinner = ora(`Capturando ${url}`).start();
     
     try {
@@ -1350,8 +1406,8 @@ export class ScreenshotService {
       let resultado;
       
       if (usarPlaywright) {
-        // Usar Playwright para Instagram y Facebook
-        resultado = await this.capturarConPlaywright(url, rutaCompleta);
+        // Usar Playwright para Instagram y Facebook (con soporte para modo paralelo)
+        resultado = await this.capturarConPlaywright(url, rutaCompleta, modoParalelo);
       } else {
         // Usar capture-website para otros sitios
         resultado = await this.capturarConCaptureWebsite(url, rutaCompleta);
