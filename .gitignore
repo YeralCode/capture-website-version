@@ -79,7 +79,11 @@ test_url.txt
 
 # Archivos de prueba específicos
 test-sesiones.js
+test-sesiones-persistentes.js
+test-scraping-integrado.js
 src/test-instagram-login.mjs
 
 # Carpetas de salida temporales de pruebas
 screenshots/temp_instagram_test/
+sesiones_instagram/
+sesiones_facebook/

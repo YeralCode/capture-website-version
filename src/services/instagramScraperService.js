@@ -106,7 +106,11 @@ export class InstagramScraperService {
       const scriptPath = join(process.cwd(), 'src', 'scripts', 'python', scriptName);
       const parametrosJson = JSON.stringify(parametros);
       
-      const python = spawn('python3', [scriptPath, parametrosJson], {
+      // Usar intérprete del entorno virtual si existe
+      const venvPython = join(process.cwd(), 'venv_scraping', 'bin', 'python');
+      const pythonCmd = venvPython;
+      
+      const python = spawn(pythonCmd, [scriptPath, parametrosJson], {
         stdio: ['pipe', 'pipe', 'pipe']
       });
       

@@ -49,6 +49,7 @@ async function guardarCookies(context, archivo) {
     console.log(`⚠️ Error guardando cookies: ${error.message}`);
     return false;
   }
+
 }
 
 /**
@@ -213,23 +214,27 @@ async function realizarLoginFacebookPersistente(page) {
                       pageContent.includes('Iniciar sesión') ||
                       pageContent.includes('Log in');
     
+    // 💾 GUARDAR COOKIES SIEMPRE (incluso si el login es parcial)
+    // Esto permite reutilizar la sesión en futuras ejecuciones
+    await guardarCookies(page.context(), FACEBOOK_COOKIES_FILE);
+    
     if (loginCompletamenteExitoso && !loginFallo) {
       console.log('✅ Login de Facebook completamente exitoso - acceso completo');
-      
-      // 💾 Guardar cookies para reutilizar en futuras sesiones
-      await guardarCookies(page.context(), FACEBOOK_COOKIES_FILE);
-      
+      console.log('💾 Cookies guardadas para futuras sesiones');
       return true;
     } else if (requiereVerificacion) {
       console.log('⚠️ Facebook requiere verificación de dos pasos - login parcial');
-      console.log('🔄 Continuando sin verificación completa...');
-      return false;
+      console.log('💾 Cookies guardadas - la sesión se reutilizará en futuras ejecuciones');
+      console.log('🔄 Continuando con la sesión actual...');
+      return true; // Cambiar a true para que considere que hay sesión
     } else if (loginFallo) {
       console.log('❌ Login de Facebook falló - aún en página de login');
+      console.log('💾 Cookies guardadas (aunque el login falló, podrían ser útiles)');
       return false;
     } else {
-      console.log('🔄 Estado de login incierto, asumiendo fallo para mejor captura');
-      return false;
+      console.log('🔄 Estado de login incierto - guardando sesión para reintentar');
+      console.log('💾 Cookies guardadas para futuras sesiones');
+      return true; // Cambiar a true para intentar usar esta sesión
     }
     
   } catch (error) {
@@ -281,6 +286,9 @@ async function realizarLoginInstagramDirecto(page) {
     const currentUrl = page.url();
     console.log(`📍 URL después del login: ${currentUrl}`);
     
+    // 💾 GUARDAR COOKIES SIEMPRE (incluso si el login es parcial)
+    await guardarCookies(page.context(), INSTAGRAM_COOKIES_FILE);
+    
     if (currentUrl.includes('instagram.com/') && !currentUrl.includes('login') && !currentUrl.includes('accounts/login')) {
       console.log('✅ Login directo de Instagram exitoso');
       
@@ -307,16 +315,16 @@ async function realizarLoginInstagramDirecto(page) {
         // Ignorar errores al saltar verificaciones
       }
       
-      // 💾 Guardar cookies para reutilizar en futuras sesiones
-      await guardarCookies(page.context(), INSTAGRAM_COOKIES_FILE);
-      
+      console.log('💾 Cookies guardadas para futuras sesiones');
       return true;
     } else if (currentUrl.includes('challenge')) {
       console.log('⚠️ Instagram requiere verificación de seguridad');
-      return false;
+      console.log('💾 Cookies guardadas - la sesión se reutilizará en futuras ejecuciones');
+      return true; // Cambiar a true para intentar usar la sesión
     } else {
       console.log('⚠️ Login de Instagram no completado o requiere pasos adicionales');
-      return false;
+      console.log('💾 Cookies guardadas para futuras sesiones');
+      return true; // Cambiar a true para intentar usar la sesión
     }
     
   } catch (error) {
@@ -336,7 +344,7 @@ const CONFIGURACION_DEFECTO = {
   quality: 0.9,
   fullPage: false,
   timeout: 30, // Reducir timeout para sitios que no respondan
-  delay: 3, // Aumentar delay para mejor carga
+  delay: 8, // Aumentar delay para mejor carga y evitar sobreposiciones
   waitForElement: null,
   usarNavegadorReal: true, // ¡NUEVA OPCIÓN! true = navegador real visible, false = simulado
   hideElements: [
@@ -431,6 +439,7 @@ export class ScreenshotService {
     this.configuracion = { ...CONFIGURACION_DEFECTO, ...configuracion };
     this.browser = null;
     this.sessionContext = null; // Contexto para mantener sesiones de FB/IG
+    this.paginaActiva = null; // Única pestaña persistente
     this.loginRealizado = {
       facebook: false,
       instagram: false
@@ -444,6 +453,23 @@ export class ScreenshotService {
       paginasNoDisponibles: 0, // Contador para páginas con error de conexión
       tamanioTotal: 0
     };
+  }
+
+  /**
+   * Obtiene o crea una única pestaña persistente para toda la sesión
+   */
+  async obtenerPagina() {
+    if (this.paginaActiva && !this.paginaActiva.isClosed()) {
+      return this.paginaActiva;
+    }
+    this.paginaActiva = await this.sessionContext.newPage();
+    if (!this.configuracion.usarNavegadorReal) {
+      await this.paginaActiva.setViewportSize({
+        width: this.configuracion.width,
+        height: this.configuracion.height + 100
+      });
+    }
+    return this.paginaActiva;
   }
 
   /**
@@ -504,11 +530,47 @@ export class ScreenshotService {
       // Inicializar Playwright específicamente
       await this.inicializarPlaywrightConRetry();
       
-      console.log('\n🔐 PASO 1: Autenticando Facebook...');
-      await this.realizarLoginFacebookInicial();
+      // 🍪 CARGAR COOKIES GUARDADAS INMEDIATAMENTE AL CONTEXTO
+      console.log('\n🔐 Cargando sesiones guardadas...');
+      const facebookCargado = await cargarCookies(this.sessionContext, FACEBOOK_COOKIES_FILE);
+      const instagramCargado = await cargarCookies(this.sessionContext, INSTAGRAM_COOKIES_FILE);
       
-      console.log('\n📱 PASO 2: Autenticando Instagram directamente...');
-      await this.prepararLoginInstagramDirecto();
+      // Verificar si las sesiones cargadas son válidas
+      let facebookValido = false;
+      let instagramValido = false;
+      
+      if (facebookCargado) {
+        console.log('🔍 Verificando sesión de Facebook...');
+        facebookValido = await this.verificarSesionFacebook();
+        if (facebookValido) {
+          console.log(chalk.green('✅ Sesión de Facebook válida - no se requiere login'));
+          this.loginRealizado.facebook = true;
+        } else {
+          console.log(chalk.yellow('⚠️ Sesión de Facebook expirada'));
+        }
+      }
+      
+      if (instagramCargado) {
+        console.log('🔍 Verificando sesión de Instagram...');
+        instagramValido = await this.verificarSesionInstagram();
+        if (instagramValido) {
+          console.log(chalk.green('✅ Sesión de Instagram válida - no se requiere login'));
+          this.loginRealizado.instagram = true;
+        } else {
+          console.log(chalk.yellow('⚠️ Sesión de Instagram expirada'));
+        }
+      }
+      
+      // Solo hacer login si las sesiones NO son válidas
+      if (!facebookValido) {
+        console.log('\n🔐 PASO 1: Autenticando Facebook...');
+        await this.realizarLoginFacebookInicial();
+      }
+      
+      if (!instagramValido) {
+        console.log('\n📱 PASO 2: Autenticando Instagram directamente...');
+        await this.prepararLoginInstagramDirecto();
+      }
       
       console.log('\n📊 RESUMEN DE SESIONES:');
       console.log(`  ✅ Facebook: ${this.loginRealizado.facebook ? 'Autenticado' : 'No autenticado'}`);
@@ -516,7 +578,7 @@ export class ScreenshotService {
       
       if (this.loginRealizado.facebook && this.loginRealizado.instagram) {
         console.log(chalk.green('\n🎉 ¡PERFECTO! Ambas sesiones listas para capturas'));
-        console.log('🔄 Las sesiones se mantendrán durante todo el proceso');
+        console.log(chalk.cyan('💾 Las sesiones están guardadas y se reutilizarán en futuras ejecuciones'));
       } else {
         console.log(chalk.yellow('\n⚠️ Algunas sesiones pueden requerir intervención manual'));
       }
@@ -539,50 +601,18 @@ export class ScreenshotService {
     }
 
     try {
-      console.log('🔑 Iniciando autenticación de Facebook...');
-      
-      // 🍪 PRIMERO: Intentar cargar cookies guardadas
-      const cookiesCargadas = await cargarCookies(this.sessionContext, FACEBOOK_COOKIES_FILE);
-      
-      if (cookiesCargadas) {
-        console.log(chalk.green('🎉 Usando sesión guardada de Facebook (sin necesidad de login)'));
-        
-        // Verificar que la sesión sigue válida
-        const paginaTest = await this.sessionContext.newPage();
-        await paginaTest.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded' });
-        await paginaTest.waitForTimeout(3000);
-        
-        const urlActual = paginaTest.url();
-        const contenido = await paginaTest.content();
-        const sesionValida = !urlActual.includes('login') && 
-                            !contenido.includes('name="email"') &&
-                            !contenido.includes('Iniciar sesión en Facebook');
-        
-        await paginaTest.close();
-        
-        if (sesionValida) {
-          console.log(chalk.green('✅ Sesión de Facebook válida y reutilizada'));
-          this.loginRealizado.facebook = true;
-          return true;
-        } else {
-          console.log(chalk.yellow('⚠️ Sesión guardada expiró, realizando nuevo login...'));
-        }
-      }
-      
-      // Si no hay cookies o expiraron, realizar login normal
       console.log('🔐 Realizando login manual en Facebook...');
-      const paginaFacebook = await this.sessionContext.newPage();
+      const paginaFacebook = await this.obtenerPagina();
       
       const loginExitoso = await realizarLoginFacebookPersistente(paginaFacebook);
-      await paginaFacebook.close();
       
       this.loginRealizado.facebook = true;
       
       if (loginExitoso) {
-        console.log('✅ Login de Facebook completado exitosamente');
+        console.log(chalk.green('✅ Login de Facebook completado y sesión guardada'));
         return true;
       } else {
-        console.log('⚠️ Login de Facebook parcial, pero sesión guardada');
+        console.log(chalk.yellow('⚠️ Login de Facebook parcial, sesión guardada para reintentar'));
         return false;
       }
       
@@ -603,64 +633,83 @@ export class ScreenshotService {
     }
 
     try {
-      console.log('📱 Iniciando autenticación de Instagram...');
-      
-      // 🍪 PRIMERO: Intentar cargar cookies guardadas
-      const cookiesCargadas = await cargarCookies(this.sessionContext, INSTAGRAM_COOKIES_FILE);
-      
-      if (cookiesCargadas) {
-        console.log(chalk.green('🎉 Usando sesión guardada de Instagram (sin necesidad de login)'));
-        
-        // Verificar que la sesión sigue válida
-        const paginaTest = await this.sessionContext.newPage();
-        await paginaTest.goto('https://www.instagram.com', { waitUntil: 'domcontentloaded' });
-        await paginaTest.waitForTimeout(3000);
-        
-        const urlActual = paginaTest.url();
-        const contenido = await paginaTest.content(); // Añadido para verificar contenido
-        const sesionValida = !urlActual.includes('accounts/login') && 
-                            !urlActual.includes('login') &&
-                            !contenido.includes('name="username"') && // Campo de usuario
-                            !contenido.includes('name="password"') && // Campo de contraseña
-                            !contenido.includes('Iniciar sesión') && // Texto de botón/enlace
-                            !contenido.includes('Log in') && // Texto de botón/enlace en inglés
-                            !contenido.includes('Teléfono, usuario o correo electrónico'); // Placeholder de usuario
-        
-        await paginaTest.close();
-        
-        if (sesionValida) {
-          console.log(chalk.green('✅ Sesión de Instagram válida y reutilizada'));
-          this.loginRealizado.instagram = true;
-          return true;
-        } else {
-          console.log(chalk.yellow('⚠️ Sesión guardada expiró, realizando nuevo login...'));
-        }
-      }
-      
-      // Si no hay cookies o expiraron, realizar login normal
       console.log('🔐 Realizando login manual en Instagram...');
-      const paginaInstagram = await this.sessionContext.newPage();
+      const paginaInstagram = await this.obtenerPagina();
       
       // Login directo con credenciales específicas de Instagram
       const loginExitoso = await realizarLoginInstagramDirecto(paginaInstagram);
-      
-      // Cerrar la página temporal
-      await paginaInstagram.close();
       
       // Marcar como realizado independientemente del resultado
       this.loginRealizado.instagram = true;
       
       if (loginExitoso) {
-        console.log('✅ Instagram autenticado con credenciales directas - sesión lista');
+        console.log(chalk.green('✅ Instagram autenticado y sesión guardada'));
         return true;
       } else {
-        console.log('⚠️ Instagram no se pudo autenticar, pero sesión guardada');
+        console.log(chalk.yellow('⚠️ Instagram login parcial, sesión guardada para reintentar'));
         return false;
       }
       
     } catch (error) {
       console.log(`⚠️ Error en login directo de Instagram: ${error.message}`);
       this.loginRealizado.instagram = true; // Marcar para evitar reintentos
+      return false;
+    }
+  }
+
+  /**
+   * Verifica si la sesión de Facebook cargada es válida
+   */
+  async verificarSesionFacebook() {
+    try {
+      const paginaTest = await this.obtenerPagina();
+      await paginaTest.goto('https://www.facebook.com', { 
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      });
+      await paginaTest.waitForTimeout(3000);
+      
+      const urlActual = paginaTest.url();
+      const contenido = await paginaTest.content();
+      const sesionValida = !urlActual.includes('login') && 
+                          !contenido.includes('name="email"') &&
+                          !contenido.includes('Iniciar sesión en Facebook') &&
+                          !contenido.includes('Log in to Facebook');
+      
+      // Reutilizar pestaña
+      return sesionValida;
+    } catch (error) {
+      console.log(`⚠️ Error verificando sesión de Facebook: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Verifica si la sesión de Instagram cargada es válida
+   */
+  async verificarSesionInstagram() {
+    try {
+      const paginaTest = await this.obtenerPagina();
+      await paginaTest.goto('https://www.instagram.com', { 
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      });
+      await paginaTest.waitForTimeout(3000);
+      
+      const urlActual = paginaTest.url();
+      const contenido = await paginaTest.content();
+      const sesionValida = !urlActual.includes('accounts/login') && 
+                          !urlActual.includes('login') &&
+                          !contenido.includes('name="username"') &&
+                          !contenido.includes('name="password"') &&
+                          !contenido.includes('Iniciar sesión') &&
+                          !contenido.includes('Log in') &&
+                          !contenido.includes('Teléfono, usuario o correo electrónico');
+      
+      // Reutilizar pestaña
+      return sesionValida;
+    } catch (error) {
+      console.log(`⚠️ Error verificando sesión de Instagram: ${error.message}`);
       return false;
     }
   }
@@ -735,8 +784,8 @@ export class ScreenshotService {
       // Normalizar URL (agregar protocolo si no lo tiene)
       const urlNormalizada = this.normalizarUrl(url);
       
-      // Crear nueva página desde el contexto persistente
-      page = await this.sessionContext.newPage();
+      // Usar una sola página persistente
+      page = await this.obtenerPagina();
       
       // Configurar viewport solo en modo simulado
       if (!this.configuracion.usarNavegadorReal) {
@@ -847,7 +896,7 @@ export class ScreenshotService {
           
           // Esperar tiempo adicional para que el contenido básico se cargue
           console.log(`⏳ Esperando carga completa del contenido básico...`);
-          await page.waitForTimeout(3000);
+          await page.waitForTimeout(8000);
           
           // Verificar la URL actual después de la navegación
           const urlActual = page.url();
@@ -896,9 +945,7 @@ export class ScreenshotService {
             // Crear página informativa formal para Facebook
             const paginaInformativa = this.generarPaginaInformativa(url, 'Facebook');
             
-            // Cerrar la página actual y crear una nueva para mostrar la página informativa
-      await page.close();
-            page = await this.sessionContext.newPage();
+            // Reutilizar misma pestaña para mostrar la página informativa
             
             // Configurar viewport para la página informativa
             if (!this.configuracion.usarNavegadorReal) {
@@ -933,7 +980,7 @@ export class ScreenshotService {
           
           // Esperar tiempo adicional para que el contenido se cargue
           console.log(`⏳ Esperando carga completa del contenido de Instagram...`);
-          await page.waitForTimeout(3000);
+          await page.waitForTimeout(8000);
           
           // Verificar si la página requiere login
           const contenidoPagina = await page.content();
@@ -950,9 +997,7 @@ export class ScreenshotService {
             // Crear página informativa formal para Instagram
             const paginaInformativa = this.generarPaginaInformativa(url, 'Instagram');
             
-            // Cerrar la página actual y crear una nueva para mostrar la página informativa
-            await page.close();
-            page = await this.browser.newPage();
+            // Reutilizar misma pestaña para mostrar la página informativa
             
             // Configurar viewport para la página informativa
             await page.setViewportSize({
@@ -1025,7 +1070,7 @@ export class ScreenshotService {
 
       try {
         // Después de la navegación, esperar un momento para que cargue el contenido
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(5000);
         
         // Si estamos en Facebook, verificar si seguimos en una página de verificación
         if (esFacebook) {
@@ -1060,6 +1105,10 @@ export class ScreenshotService {
 
         // Esperar a que la página se cargue completamente
       await page.waitForTimeout(this.configuracion.delay * 1000);
+      
+      // Espera adicional para evitar sobreposiciones entre capturas
+      console.log(`⏳ Esperando estabilización de página antes de captura...`);
+      await page.waitForTimeout(3000);
 
         // Intentar esperar a que las imágenes se carguen
         try {
@@ -1158,9 +1207,7 @@ export class ScreenshotService {
       };
 
     } finally {
-      if (page) {
-      await page.close();
-      }
+      // No cerrar la página: se reutiliza una única pestaña
     }
   }
 
@@ -1273,18 +1320,22 @@ export class ScreenshotService {
   /**
    * Captura un screenshot de una URL - SIEMPRE intenta tomar screenshot
    */
-  async capturarScreenshot(url, indice, usarPlaywright = false) {
+  async capturarScreenshot(url, indice, usarPlaywright = false, nombreBasePersonalizado = null) {
     const spinner = ora(`Capturando ${url}`).start();
     
     try {
-      // Extraer nombre del dominio de la URL para nombre descriptivo
+      // Determinar base de nombre de archivo
       let nombrePagina = 'sitio-desconocido';
-      try {
-        const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
-        nombrePagina = urlObj.hostname.replace(/^www\./, '').replace(/\./g, '-');
-      } catch (error) {
-        // Si no se puede parsear la URL, usar una versión limpia
-        nombrePagina = url.replace(/[^a-zA-Z0-9]/g, '-').substring(0, 30);
+      if (nombreBasePersonalizado && typeof nombreBasePersonalizado === 'string') {
+        nombrePagina = nombreBasePersonalizado.replace(/[^a-zA-Z0-9_-]/g, '-');
+      } else {
+        try {
+          const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+          nombrePagina = urlObj.hostname.replace(/^www\./, '').replace(/\./g, '-');
+        } catch (error) {
+          // Si no se puede parsear la URL, usar una versión limpia
+          nombrePagina = url.replace(/[^a-zA-Z0-9]/g, '-').substring(0, 30);
+        }
       }
       
       // Generar timestamp legible
@@ -1292,7 +1343,7 @@ export class ScreenshotService {
       const fecha = now.toISOString().slice(0, 10); // YYYY-MM-DD
       const hora = now.toTimeString().slice(0, 8).replace(/:/g, '-'); // HH-MM-SS
       
-      // Generar nombre descriptivo: dominio_fecha_hora.png
+      // Generar nombre descriptivo: base_fecha_hora.ext
       const nombreArchivo = `${nombrePagina}_${fecha}_${hora}.${this.configuracion.format}`;
       const rutaCompleta = join(this.configuracion.directorioSalida, nombreArchivo);
 

@@ -7,6 +7,18 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import re
+import pickle
+
+# Credenciales de Facebook
+FACEBOOK_CREDENTIALS = {
+    "username": "3022159238",
+    "password": "6897861Yps@"
+}
+
+# Directorio para guardar sesiones
+DIRECTORIO_SESIONES = os.path.join(os.getcwd(), 'sesiones_facebook')
+os.makedirs(DIRECTORIO_SESIONES, exist_ok=True)
+ARCHIVO_SESION = os.path.join(DIRECTORIO_SESIONES, f'session-{FACEBOOK_CREDENTIALS["username"]}.pkl')
 
 # Intentar importar facebook_scraper como método alternativo
 try:
@@ -15,6 +27,134 @@ try:
 except ImportError:
     FACEBOOK_SCRAPER_DISPONIBLE = False
     print("⚠️ facebook_scraper no disponible, usando solo método web scraping")
+
+def guardar_sesion(session):
+    """
+    Guarda las cookies de la sesión en un archivo pickle
+    """
+    try:
+        with open(ARCHIVO_SESION, 'wb') as f:
+            pickle.dump(session.cookies, f)
+        print(f"💾 Sesión guardada en: {ARCHIVO_SESION}")
+        return True
+    except Exception as e:
+        print(f"⚠️ No se pudo guardar la sesión: {str(e)}")
+        return False
+
+def cargar_sesion():
+    """
+    Carga las cookies de la sesión desde un archivo pickle
+    """
+    try:
+        if os.path.exists(ARCHIVO_SESION):
+            print(f"🔄 Cargando sesión guardada de Facebook...")
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,es;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            
+            with open(ARCHIVO_SESION, 'rb') as f:
+                session.cookies.update(pickle.load(f))
+            
+            print("✅ Sesión de Facebook cargada exitosamente")
+            return session
+        else:
+            print("📝 No se encontró sesión guardada")
+            return None
+    except Exception as e:
+        print(f"⚠️ Error al cargar sesión: {str(e)}")
+        return None
+
+def verificar_sesion_valida(session):
+    """
+    Verifica si la sesión guardada sigue siendo válida
+    """
+    try:
+        print("🔍 Verificando si la sesión es válida...")
+        # Intentar acceder a una página que requiere autenticación
+        response = session.get('https://www.facebook.com/', timeout=10)
+        
+        # Verificar si estamos autenticados
+        es_login = (
+            'login' in response.url.lower() or
+            'iniciar sesión' in response.text.lower()[:1000] or
+            'log in' in response.text.lower()[:1000]
+        )
+        
+        if not es_login and response.status_code == 200:
+            print("✅ Sesión válida - autenticado correctamente")
+            return True
+        else:
+            print("⚠️ Sesión expirada o inválida")
+            return False
+            
+    except Exception as e:
+        print(f"⚠️ Error al verificar sesión: {str(e)}")
+        return False
+
+def realizar_login_facebook(session):
+    """
+    Realiza login en Facebook usando las credenciales proporcionadas
+    """
+    try:
+        print("🔐 Iniciando sesión en Facebook...")
+        
+        # Obtener la página de login
+        login_url = "https://www.facebook.com/login"
+        response = session.get(login_url)
+        
+        if response.status_code != 200:
+            print(f"❌ Error al acceder a la página de login: {response.status_code}")
+            return False
+        
+        # Parsear la página para obtener el CSRF token
+        soup = BeautifulSoup(response.text, 'html.parser')
+        csrf_token = None
+        
+        # Buscar el token CSRF
+        csrf_input = soup.find('input', {'name': 'fb_dtsg'})
+        if csrf_input:
+            csrf_token = csrf_input.get('value')
+        
+        if not csrf_token:
+            print("⚠️ No se pudo obtener el token CSRF")
+            return False
+        
+        print(f"✅ Token CSRF obtenido: {csrf_token[:10]}...")
+        
+        # Preparar datos de login
+        login_data = {
+            'email': FACEBOOK_CREDENTIALS['username'],
+            'pass': FACEBOOK_CREDENTIALS['password'],
+            'login': 'Iniciar sesión',
+            'fb_dtsg': csrf_token
+        }
+        
+        # Realizar el login
+        login_response = session.post(
+            'https://www.facebook.com/login',
+            data=login_data,
+            allow_redirects=True
+        )
+        
+        # Verificar si el login fue exitoso
+        if 'login' not in login_response.url.lower() and 'checkpoint' not in login_response.url.lower():
+            print("✅ Login exitoso en Facebook")
+            # Guardar la sesión para futuras ejecuciones
+            guardar_sesion(session)
+            return True
+        else:
+            print("❌ Login falló - redirigido a página de login")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error durante el login: {str(e)}")
+        return False
 
 def extraer_pagina_facebook_simple(parametros):
     """
@@ -37,6 +177,35 @@ def extraer_pagina_facebook_simple(parametros):
         
         # URL de la página
         url_pagina = f"https://www.facebook.com/{page_name}"
+        
+        # Intentar cargar sesión guardada primero
+        session = cargar_sesion()
+        login_exitoso = False
+        
+        if session:
+            # Verificar si la sesión es válida
+            if verificar_sesion_valida(session):
+                login_exitoso = True
+                print("✅ Usando sesión guardada válida")
+            else:
+                print("⚠️ Sesión expirada, realizando nuevo login...")
+                session = None
+        
+        # Si no hay sesión válida, crear una nueva y hacer login
+        if not session:
+            print("🔑 Creando nueva sesión de Facebook...")
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,es;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            
+            # Intentar hacer login
+            login_exitoso = realizar_login_facebook(session)
         
         # Métodos de acceso sin login - probamos varios enfoques
         metodos = [
@@ -100,15 +269,12 @@ def extraer_pagina_facebook_simple(parametros):
         session = None
         metodo_exitoso = None
         
-        # Probar cada método hasta encontrar uno que funcione
-        for metodo in metodos:
+        # Si el login fue exitoso, usar la sesión autenticada
+        if login_exitoso:
+            print("🔄 Usando sesión autenticada para acceder a la página...")
             try:
-                print(f"🔄 Probando método: {metodo['nombre']}")
-                
-                session = requests.Session()
-                session.headers.update(metodo['headers'])
-                
-                response = session.get(metodo['url'], timeout=30, allow_redirects=True)
+                response = session.get(url_pagina, timeout=30, allow_redirects=True)
+                metodo_exitoso = "Sesión autenticada"
                 
                 # Verificar si es exitoso
                 es_login = (
@@ -116,19 +282,50 @@ def extraer_pagina_facebook_simple(parametros):
                     'iniciar sesión' in response.text.lower() or
                     'entrar en facebook' in response.text.lower() or
                     'log in' in response.text.lower() or
-                    len(response.text.strip()) < 500  # Página muy vacía
+                    len(response.text.strip()) < 500
                 )
                 
                 if response.status_code == 200 and not es_login:
-                    print(f"✅ Acceso exitoso con método: {metodo['nombre']}")
-                    metodo_exitoso = metodo['nombre']
-                    break
+                    print(f"✅ Acceso exitoso con sesión autenticada")
                 else:
-                    print(f"⚠️ Método {metodo['nombre']} falló (login detectado o error)")
-                    
+                    print(f"⚠️ Sesión autenticada falló, probando métodos alternativos...")
+                    login_exitoso = False
             except Exception as e:
-                print(f"⚠️ Error en método {metodo['nombre']}: {str(e)}")
-                continue
+                print(f"⚠️ Error con sesión autenticada: {str(e)}")
+                login_exitoso = False
+        
+        # Si no hay login o falló, probar métodos alternativos
+        if not login_exitoso:
+            # Probar cada método hasta encontrar uno que funcione
+            for metodo in metodos:
+                try:
+                    print(f"🔄 Probando método: {metodo['nombre']}")
+                    
+                    session_alt = requests.Session()
+                    session_alt.headers.update(metodo['headers'])
+                    
+                    response = session_alt.get(metodo['url'], timeout=30, allow_redirects=True)
+                    
+                    # Verificar si es exitoso
+                    es_login = (
+                        'login' in response.url.lower() or
+                        'iniciar sesión' in response.text.lower() or
+                        'entrar en facebook' in response.text.lower() or
+                        'log in' in response.text.lower() or
+                        len(response.text.strip()) < 500  # Página muy vacía
+                    )
+                
+                    if response.status_code == 200 and not es_login:
+                        print(f"✅ Acceso exitoso con método: {metodo['nombre']}")
+                        metodo_exitoso = metodo['nombre']
+                        session = session_alt  # Usar la sesión que funcionó
+                        break
+                    else:
+                        print(f"⚠️ Método {metodo['nombre']} falló (login detectado o error)")
+                        
+                except Exception as e:
+                    print(f"⚠️ Error en método {metodo['nombre']}: {str(e)}")
+                    continue
         
         # Si ningún método funcionó, intentar con facebook_scraper
         if not response or metodo_exitoso is None:
@@ -167,7 +364,8 @@ def extraer_pagina_facebook_simple(parametros):
             'imagen_perfil_descargada': False,
             'ruta_imagen_perfil': None,
             'pagina_existe': False,
-            'codigo_respuesta': response.status_code if response else 0
+            'codigo_respuesta': response.status_code if response else 0,
+            'login_exitoso': login_exitoso
         }
         
         if response and response.status_code == 200:
@@ -204,8 +402,8 @@ def extraer_pagina_facebook_simple(parametros):
         # Intentar extraer información del meta description
         meta_desc = soup.find('meta', {'name': 'description'})
         if meta_desc and meta_desc.get('content'):
-                if not datos_pagina['descripcion'] or 'requiere autenticación' in datos_pagina['descripcion']:
-            datos_pagina['descripcion'] = meta_desc.get('content')
+            if not datos_pagina['descripcion'] or 'requiere autenticación' in datos_pagina['descripcion']:
+                datos_pagina['descripcion'] = meta_desc.get('content')
         
         # Intentar extraer información de Open Graph
         og_title = soup.find('meta', {'property': 'og:title'})
@@ -214,8 +412,8 @@ def extraer_pagina_facebook_simple(parametros):
         
         og_desc = soup.find('meta', {'property': 'og:description'})
         if og_desc and og_desc.get('content'):
-                if not datos_pagina['descripcion'] or 'requiere autenticación' in datos_pagina['descripcion']:
-            datos_pagina['descripcion'] = og_desc.get('content')
+            if not datos_pagina['descripcion'] or 'requiere autenticación' in datos_pagina['descripcion']:
+                datos_pagina['descripcion'] = og_desc.get('content')
             
             # Buscar imagen de perfil
             imagen_url = None

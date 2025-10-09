@@ -13,7 +13,7 @@ export const configuracionDefecto = {
     fullPage: false,
     timeout: 120, // segundos
     delay: 2, // segundos antes de capturar
-    concurrencia: 3, // número de capturas simultáneas
+    concurrencia: 1, // número de capturas simultáneas (1 = una por una)
     reintentos: 2, // número de reintentos en caso de error
     blockAds: true,
     darkMode: false,

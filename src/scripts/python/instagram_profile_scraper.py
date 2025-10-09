@@ -7,6 +7,12 @@ import requests
 from datetime import datetime
 from urllib.parse import urlparse
 
+# Credenciales de Instagram
+INSTAGRAM_CREDENTIALS = {
+    "username": "ypulido2004@gmail.com",
+    "password": "6897861Yps@"
+}
+
 def extraer_perfil_instagram(parametros):
     """
     Extrae información de un perfil de Instagram usando instaloader
@@ -25,17 +31,54 @@ def extraer_perfil_instagram(parametros):
         
         # Crear directorio de salida
         os.makedirs(directorio, exist_ok=True)
+                # Crear directorio para sesiones persistentes
+        directorio_sesiones = os.path.join(os.getcwd(), 'sesiones_instagram')
+        os.makedirs(directorio_sesiones, exist_ok=True)
         
-        # Inicializar instaloader
+        # Inicializar instaloader con directorio de sesiones
         loader = instaloader.Instaloader(
-            download_pictures=True,  # Habilitar descarga de imágenes
+            download_pictures=True,
             download_videos=False,
             download_video_thumbnails=False,
             download_geotags=False,
             download_comments=incluir_comentarios,
             save_metadata=True,
-            compress_json=False
+            compress_json=False,
+            dirname_pattern=directorio_sesiones,
+            filename_pattern='{profile}'
         )
+        
+        # Intentar cargar sesión existente
+        login_exitoso = False
+        session_file = os.path.join(directorio_sesiones, f'session-{INSTAGRAM_CREDENTIALS["username"]}')
+        
+        try:
+            if os.path.exists(session_file):
+                print(f"🔄 Cargando sesión guardada de Instagram...")
+                loader.load_session_from_file(INSTAGRAM_CREDENTIALS['username'], session_file)
+                print("✅ Sesión de Instagram cargada exitosamente")
+                login_exitoso = True
+            else:
+                raise Exception("No hay sesión guardada")
+        except Exception as e:
+            # Si no hay sesión o falló, hacer login
+            try:
+                print(f"🔐 Iniciando sesión en Instagram con {INSTAGRAM_CREDENTIALS['username']}...")
+                loader.login(INSTAGRAM_CREDENTIALS['username'], INSTAGRAM_CREDENTIALS['password'])
+                print("✅ Login exitoso en Instagram")
+                
+                # Guardar sesión para uso futuro
+                try:
+                    loader.save_session_to_file(session_file)
+                    print(f"💾 Sesión guardada en: {session_file}")
+                except Exception as save_error:
+                    print(f"⚠️ No se pudo guardar la sesión: {str(save_error)}")
+                
+                login_exitoso = True
+            except Exception as login_error:
+                print(f"⚠️ Error en login: {str(login_error)}")
+                print("🔄 Continuando sin autenticación...")
+                login_exitoso = False
         
         # Obtener perfil
         profile = instaloader.Profile.from_username(loader.context, username)
@@ -55,18 +98,22 @@ def extraer_perfil_instagram(parametros):
             'mediacount': profile.mediacount,
             'is_private': profile.is_private,
             'is_verified': profile.is_verified,
-            'is_business': profile.is_business,
+            'is_business': getattr(profile, 'is_business', False),
             'external_url': profile.external_url,
             'profile_pic_url': profile.profile_pic_url,
-            'igtvcount': profile.igtvcount,
-            'videocount': profile.videocount,
-            'highlight_reel_count': profile.highlight_reel_count,
-            'business_category_name': profile.business_category_name,
-            'contact_phone_number': profile.contact_phone_number,
-            'public_email': profile.public_email,
+            'igtvcount': getattr(profile, 'igtvcount', 0),
+            'videocount': getattr(profile, 'videocount', 0),
+            'highlight_reel_count': getattr(profile, 'highlight_reel_count', 0),
+            'business_category_name': getattr(profile, 'business_category_name', ''),
+            'contact_phone_number': getattr(profile, 'contact_phone_number', ''),
+            'public_email': getattr(profile, 'public_email', ''),
             'posts': [],
             'imagen_perfil_descargada': False,
-            'ruta_imagen_perfil': None
+            'ruta_imagen_perfil': None,
+            'login_exitoso': login_exitoso,
+            'usuario_existe': True,
+            'fecha_extraccion': datetime.now().isoformat(),
+            'metodo': 'instaloader_con_login' if login_exitoso else 'instaloader_sin_login'
         }
         
         # Intentar descargar la imagen de perfil

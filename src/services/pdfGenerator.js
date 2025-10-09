@@ -166,7 +166,7 @@ export class PDFGenerator {
     
     // Estadísticas reales usando evaluación exigente
     const conContenidoReal = resultados.filter(r => this.evaluarContenidoExigente(r) === 'OK').length;
-    const sinContenido = resultados.filter(r => this.evaluarContenidoExigente(r) === 'No').length;
+    const bloqueadas = resultados.filter(r => this.evaluarContenidoExigente(r) === 'No').length;
     const total = resultados.length;
     const porcentajeContenidoReal = total > 0 ? ((conContenidoReal / total) * 100).toFixed(1) : '0.0';
 
@@ -184,8 +184,7 @@ export class PDFGenerator {
     
     const estadisticas = [
       `Total de URLs procesadas: ${total}`,
-      `Con contenido disponible: ${conContenidoReal}`,
-      `Sin contenido/No disponibles: ${sinContenido}`,
+      `Bloqueadas/No disponibles: ${bloqueadas}`,
       `Porcentaje de contenido real: ${porcentajeContenidoReal}%`,
       `Fecha de procesamiento: ${new Date().toLocaleDateString('es-ES')}`,
       `Hora de procesamiento: ${new Date().toLocaleTimeString('es-ES')}`,
@@ -257,7 +256,7 @@ export class PDFGenerator {
     // Encabezados
     this.pdf.setFontSize(8);
     this.pdf.setFont('helvetica', 'bold');
-    const encabezados = ['#', 'URL', 'Tipo', 'Contenido'];
+    const encabezados = ['#', 'URL', 'Tipo', 'Bloqueado'];
     
     encabezados.forEach((encabezado, index) => {
       this.pdf.text(encabezado, posicionX, this.posicionY);
@@ -283,14 +282,15 @@ export class PDFGenerator {
       
       posicionX = posicionXInicial;
       
-      // Evaluar contenido con criterio más exigente
-      const tieneContenido = this.evaluarContenidoExigente(resultado);
+      // Evaluar si está bloqueado (lógica invertida)
+      const tieneContenidoReal = this.evaluarContenidoExigente(resultado);
+      const estaBloqueado = tieneContenidoReal === 'OK' ? 'NO' : 'SÍ';
       
       const fila = [
         String(index + 1),
         this.truncarTexto(resultado.url, 50),
         resultado.tipo.toUpperCase(),
-        tieneContenido
+        estaBloqueado
       ];
 
       fila.forEach((celda, colIndex) => {
@@ -324,11 +324,23 @@ export class PDFGenerator {
       return;
     }
 
-    // Procesar todas las capturas manteniendo el orden original
+    // Procesar todas las capturas manteniendo el orden original, priorizando la última imagen en disco
     for (let i = 0; i < resultados.length; i++) {
       const resultado = resultados[i];
       if (resultado.screenshot && resultado.screenshot.nombreArchivo && resultado.screenshot.rutaCompleta) {
       try {
+          // Revalidar que el archivo existe y tomar la versión más nueva si hay duplicados
+          const fsPath = resultado.screenshot.rutaCompleta;
+          if (!(await fs.pathExists?.(fsPath))) {
+            // Si no existe la ruta guardada, intentar buscar por nombre en el directorio screenshots
+            const dir = 'screenshots';
+            const nombre = resultado.screenshot.nombreArchivo;
+            const candidato = join(dir, nombre);
+            try {
+              await fs.access(candidato);
+              resultado.screenshot.rutaCompleta = candidato;
+            } catch {}
+          }
           await this.agregarCapturaIndividual(resultado, i);
       } catch (error) {
           console.error(chalk.red(`Error al agregar captura ${resultado.url}:`), error.message);
@@ -362,11 +374,11 @@ export class PDFGenerator {
       this.pdf.setFont('helvetica', 'normal');
       this.pdf.text(`Tipo: ${resultado.tipo.toUpperCase()}`, this.margenIzquierdo, this.posicionY);
       
-      // Evaluar contenido con criterio exigente
+      // Evaluar si está bloqueado (lógica invertida)
       const tieneContenidoReal = this.evaluarContenidoExigente(resultado);
-      const estadoContenido = tieneContenidoReal === 'OK' ? 'Contenido disponible' : 'Sin contenido/No disponible';
+      const estaBloqueado = tieneContenidoReal === 'OK' ? 'NO' : 'SÍ';
       
-      this.pdf.text(`Contenido: ${estadoContenido}`, this.margenIzquierdo + 100, this.posicionY);
+      this.pdf.text(`Bloqueado: ${estaBloqueado}`, this.margenIzquierdo + 100, this.posicionY);
       this.posicionY += 8;
 
       // Información del archivo
@@ -511,11 +523,17 @@ export class PDFGenerator {
   }
 
   /**
-   * Evalúa el contenido con criterio más exigente detectando páginas no disponibles
+   * Evalúa el contenido con criterio más exigente usando datos de scraping real
    * @param {Object} resultado - Resultado del procesamiento
    * @returns {string} 'OK' si tiene contenido real, 'No' si no está disponible
    */
   evaluarContenidoExigente(resultado) {
+    // Priorizar análisis de scraping si está disponible
+    if (resultado.datosScraping || resultado.tieneContenido !== undefined) {
+      return this.evaluarContenidoConScraping(resultado);
+    }
+
+    // Fallback al método antiguo si no hay datos de scraping
     // Si el screenshot falló completamente
     if (!resultado.screenshot || !resultado.screenshot.exito) {
       return 'No';
@@ -577,6 +595,95 @@ export class PDFGenerator {
     }
     
     return 'No';
+  }
+
+  /**
+   * Evalúa el contenido basándose en datos reales de scraping
+   * @param {Object} resultado - Resultado con datos de scraping
+   * @returns {string} 'OK' si tiene contenido real, 'No' si no está disponible
+   */
+  evaluarContenidoConScraping(resultado) {
+    // Si hay evaluación de contenido del servicio integrado, usarla
+    if (resultado.evaluacionContenido) {
+      return resultado.evaluacionContenido.tieneContenido ? 'OK' : 'No';
+    }
+
+    // Si ya viene evaluado del scraping, usar ese resultado
+    if (resultado.tieneContenido !== undefined) {
+      return resultado.tieneContenido ? 'OK' : 'No';
+    }
+
+    // Si no hay datos de scraping, es 'No'
+    if (!resultado.datosScraping) {
+      return 'No';
+    }
+
+    const scraping = resultado.datosScraping;
+
+    // Si el scraping falló, es 'No'
+    if (!scraping.exito) {
+      return 'No';
+    }
+
+    const datos = scraping.datos;
+
+    // Evaluación específica para Instagram
+    if (resultado.tipo === 'instagram') {
+      // CASO ESPECIAL: Si no hay foto de perfil Y no hay posts = BLOQUEADA
+      if (!datos.imagen_perfil_descargada && 
+          (!datos.mediacount || datos.mediacount === 0)) {
+        return 'No'; // Bloqueada
+      }
+      
+      // Verificar indicadores positivos
+      const indicadoresPositivos = [];
+      
+      if (datos.usuario_existe === true) indicadoresPositivos.push(1);
+      if (datos.login_exitoso === true) indicadoresPositivos.push(1);
+      if (datos.imagen_perfil_descargada === true) indicadoresPositivos.push(1);
+      if (datos.biography && datos.biography.length > 5) indicadoresPositivos.push(1);
+      if (datos.followers && datos.followers > 0) indicadoresPositivos.push(1);
+      if (datos.mediacount && datos.mediacount > 0) indicadoresPositivos.push(1);
+      if (datos.is_verified === true) indicadoresPositivos.push(1);
+      
+      // Verificar indicadores negativos
+      const indicadoresNegativos = [];
+      
+      if (datos.usuario_existe === false) indicadoresNegativos.push(1);
+      if (datos.login_requerido === true && !datos.login_exitoso) indicadoresNegativos.push(1);
+      if (datos.error) indicadoresNegativos.push(1);
+      
+      // Si tiene más indicadores positivos que negativos, es 'OK'
+      return indicadoresPositivos.length > indicadoresNegativos.length ? 'OK' : 'No';
+    }
+
+    // Evaluación específica para Facebook
+    if (resultado.tipo === 'facebook') {
+      // Verificar indicadores positivos
+      const indicadoresPositivos = [];
+      
+      if (datos.pagina_existe === true) indicadoresPositivos.push(1);
+      if (datos.login_exitoso === true) indicadoresPositivos.push(1);
+      if (datos.imagen_perfil_descargada === true) indicadoresPositivos.push(1);
+      if (datos.titulo && datos.titulo !== 'Facebook' && datos.titulo.length > 5) indicadoresPositivos.push(1);
+      if (datos.descripcion && !datos.descripcion.includes('requiere autenticación') && datos.descripcion.length > 20) indicadoresPositivos.push(1);
+      if (datos.seguidores && datos.seguidores !== 'N/A') indicadoresPositivos.push(1);
+      if (datos.me_gusta && datos.me_gusta !== 'N/A') indicadoresPositivos.push(1);
+      
+      // Verificar indicadores negativos
+      const indicadoresNegativos = [];
+      
+      if (datos.pagina_existe === false) indicadoresNegativos.push(1);
+      if (datos.requiere_login === true && !datos.login_exitoso) indicadoresNegativos.push(1);
+      if (datos.error) indicadoresNegativos.push(1);
+      if (datos.codigo_respuesta === 404) indicadoresNegativos.push(1);
+      
+      // Si tiene más indicadores positivos que negativos, es 'OK'
+      return indicadoresPositivos.length > indicadoresNegativos.length ? 'OK' : 'No';
+    }
+
+    // Para otros tipos, si el scraping fue exitoso, es 'OK'
+    return 'OK';
   }
 
   /**

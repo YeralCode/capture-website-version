@@ -1,0 +1,17 @@
+# URLs de prueba para scraping de Facebook e Instagram
+# Este archivo tiene URLs de tus archivos de redes sociales
+
+# === FACEBOOK ===
+https://www.facebook.com/bingopingolive
+https://www.facebook.com/BingoMiirageOnline
+https://www.facebook.com/Bingoparatodos
+https://www.facebook.com/bingoplaycolombia
+https://www.facebook.com/BingosManiaCom
+
+# === INSTAGRAM ===
+https://www.instagram.com/pokergold.co
+https://www.instagram.com/pppokerbots
+https://www.instagram.com/pppoker_.col
+https://www.instagram.com/pokercolombiaclub
+https://www.instagram.com/pppokercolombia
+

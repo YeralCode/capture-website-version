@@ -5,6 +5,7 @@ import ora from 'ora';
 import { cargarMultiplesArchivosUrls, filtrarUrlsValidas } from './utils/urlLoader.js';
 import { IntegratedScrapingService } from './services/integratedScrapingService.js';
 import { PDFGenerator } from './services/pdfGenerator.js';
+import { WordGenerator } from './services/wordGenerator.js';
 import { 
   configuracionDefecto, 
   fusionarConfiguracion, 
@@ -35,6 +36,7 @@ class IntegratedScrapingAutomation {
     
     this.integratedService = null;
     this.pdfGenerator = null;
+    this.wordGenerator = null;
     this.estadisticas = {
       inicioEjecucion: null,
       finEjecucion: null,
@@ -74,6 +76,7 @@ class IntegratedScrapingAutomation {
       // Inicializar servicios integrados
       this.integratedService = new IntegratedScrapingService(this.configuracion);
       this.pdfGenerator = new PDFGenerator();
+      this.wordGenerator = new WordGenerator();
 
       spinner.succeed('✅ Servicios integrados inicializados correctamente');
       
@@ -143,11 +146,12 @@ class IntegratedScrapingAutomation {
       // Paso 3: Procesar URLs con scraping y capturas
       const resultados = await this.procesarUrls(urlsFinales);
 
-      // Paso 4: Generar PDF con datos extraídos y screenshots
+      // Paso 4: Generar PDF y Word con datos extraídos y screenshots
       const rutaPdf = await this.generarReportePDF(resultados);
+      const rutaDocx = await this.generarReporteWord(resultados);
 
       // Paso 5: Mostrar resumen final
-      this.mostrarResumenFinal(resultados, rutaPdf);
+      this.mostrarResumenFinal(resultados, rutaPdf, rutaDocx);
 
     } catch (error) {
       console.error(chalk.red('\n❌ Error durante la ejecución:'), error.message);
@@ -316,6 +320,32 @@ class IntegratedScrapingAutomation {
   }
 
   /**
+   * Genera el reporte Word con datos extraídos y screenshots
+   */
+  async generarReporteWord(resultados) {
+    console.log(chalk.blue('\n📝 GENERANDO REPORTE WORD (.docx)\n'));
+    
+    const spinner = ora('Generando Word con datos extraídos...').start();
+    
+    try {
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
+      const nombreArchivo = `reporte-integrado-${timestamp}.docx`;
+      
+      // Crear datos para el Word que incluyan tanto screenshots como datos extraídos
+      const datosParaWord = this.prepararDatosParaPDF(resultados);
+      
+      const rutaDocx = await this.wordGenerator.generarDOCX(datosParaWord, nombreArchivo);
+      
+      spinner.succeed(chalk.green('✅ Word integrado generado exitosamente'));
+      return rutaDocx;
+      
+    } catch (error) {
+      spinner.fail('❌ Error al generar Word');
+      throw error;
+    }
+  }
+
+  /**
    * Prepara los datos para el PDF incluyendo screenshots y datos extraídos
    */
   prepararDatosParaPDF(resultados) {
@@ -325,7 +355,7 @@ class IntegratedScrapingAutomation {
       exito: resultado.exito,
       timestamp: resultado.timestamp,
       screenshot: resultado.screenshot,
-      datosExtraidos: resultado.datos,
+      datosScraping: resultado.datos,  // Cambiado de datosExtraidos a datosScraping
       resumen: this.generarResumenResultado(resultado)
     }));
   }
@@ -385,7 +415,7 @@ class IntegratedScrapingAutomation {
   /**
    * Muestra el resumen final de la ejecución
    */
-  mostrarResumenFinal(resultados, rutaPdf) {
+  mostrarResumenFinal(resultados, rutaPdf, rutaDocx) {
     const porcentajeExito = ((this.estadisticas.urlsExitosas / this.estadisticas.totalUrls) * 100).toFixed(1);
     const tiempoMinutos = (this.estadisticas.tiempoTotal / 1000 / 60).toFixed(2);
 
@@ -402,6 +432,7 @@ class IntegratedScrapingAutomation {
     console.log(chalk.yellow(`  • Porcentaje de éxito: ${porcentajeExito}%`));
     console.log(chalk.blue(`  • Tiempo total: ${tiempoMinutos} minutos`));
     console.log(chalk.magenta(`  • PDF generado: ${rutaPdf}`));
+    console.log(chalk.magenta(`  • Word generado: ${rutaDocx}`));
 
     console.log(chalk.cyan('\n📱 INSTAGRAM (SCRAPING + SCREENSHOTS):'));
     console.log(chalk.gray(`  • URLs: ${instagram.length}`));
