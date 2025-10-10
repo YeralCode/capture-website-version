@@ -464,14 +464,37 @@ def extraer_pagina_facebook_simple(parametros):
                 len(soup.get_text().strip()) < 300
             )
             
-            if 'not found' in response.text.lower() or 'page not found' in response.text.lower():
+            # Detectar mensajes de bloqueo/error
+            texto_respuesta = response.text.lower()
+            
+            # PRIORIDAD 1: Detectar páginas bloqueadas/no disponibles por navegador
+            if ('not available on this browser' in texto_respuesta or
+                'facebook is not available' in texto_respuesta or
+                'unsupported browser' in texto_respuesta or
+                'navegador no compatible' in texto_respuesta):
                 datos_pagina['pagina_existe'] = False
-                datos_pagina['error'] = 'Página no encontrada'
+                datos_pagina['error'] = 'Facebook no disponible en este navegador (posiblemente bloqueado)'
+                print(f"🚫 Página bloqueada por navegador")
+            
+            # PRIORIDAD 2: Detectar páginas no encontradas/eliminadas
+            elif ('not found' in texto_respuesta or 
+                  'page not found' in texto_respuesta or
+                  'no se encontró' in texto_respuesta or
+                  'contenido no está disponible' in texto_respuesta or
+                  'content isn\'t available' in texto_respuesta or
+                  'this content isn\'t available' in texto_respuesta):
+                datos_pagina['pagina_existe'] = False
+                datos_pagina['error'] = 'Página no encontrada o contenido no disponible'
+                print(f"🚫 Página no encontrada")
+            
+            # PRIORIDAD 3: Requiere login (pero la página EXISTE)
             elif login_detectado:
                 print(f"🔒 Página requiere login - contenido limitado")
                 datos_pagina['pagina_existe'] = True
                 datos_pagina['requiere_login'] = True
                 datos_pagina['descripcion'] = 'Página de Facebook (requiere autenticación para ver contenido completo)'
+            
+            # PRIORIDAD 4: Página accesible sin problemas
             else:
                 datos_pagina['pagina_existe'] = True
                 print(f"✅ Contenido de página accesible sin login")

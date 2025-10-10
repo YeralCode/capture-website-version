@@ -28,34 +28,35 @@ export class IntegratedScrapingService {
   }
 
   /**
-   * Limpia una URL de parámetros innecesarios (UTM, etc.)
+   * Limpia una URL de parámetros innecesarios (UTM, etc.) - OPTIMIZADO
    */
   limpiarUrl(url) {
     try {
       const urlObj = new URL(url);
       
-      // Parámetros a eliminar
-      const parametrosAEliminar = [
+      // OPTIMIZADO: Set para búsqueda O(1)
+      const parametrosAEliminar = new Set([
         'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
         'igsh', 'igshid', 'ig_web_button_share_sheet',
         'fbclid', 'mibextid', '_rdc', '_rdr'
-      ];
+      ]);
       
-      // Eliminar cada parámetro
-      parametrosAEliminar.forEach(param => {
-        urlObj.searchParams.delete(param);
-      });
-      
-      // Reconstruir URL limpia
-      let urlLimpia = urlObj.origin + urlObj.pathname;
-      
-      // Si quedan parámetros válidos, agregarlos
-      const paramsRestantes = urlObj.searchParams.toString();
-      if (paramsRestantes) {
-        urlLimpia += '?' + paramsRestantes;
+      // OPTIMIZADO: Filtrar parámetros en una pasada
+      const paramsValidos = new URLSearchParams();
+      for (const [key, value] of urlObj.searchParams) {
+        if (!parametrosAEliminar.has(key)) {
+          paramsValidos.append(key, value);
+        }
       }
       
-      // Limpiar slash final si existe
+      // Reconstruir URL limpia
+      const paramsStr = paramsValidos.toString();
+      let urlLimpia = urlObj.origin + urlObj.pathname;
+      if (paramsStr) {
+        urlLimpia += '?' + paramsStr;
+      }
+      
+      // Limpiar slash final
       urlLimpia = urlLimpia.replace(/\/$/, '');
       
       if (urlLimpia !== url) {
@@ -74,8 +75,8 @@ export class IntegratedScrapingService {
    */
   async verificarYAplicarDelay(tipo) {
     const limites = {
-      facebook: { cada: 30, delay: 5000 },  // Cada 30 capturas, 5s de delay
-      instagram: { cada: 20, delay: 8000 }  // Cada 20 capturas, 8s de delay
+      facebook: { cada: 50, delay: 2000 },  // Cada 50 capturas, 2s de delay (optimizado)
+      instagram: { cada: 40, delay: 3000 }  // Cada 40 capturas, 3s de delay (optimizado)
     };
     
     if (tipo === 'facebook' || tipo === 'instagram') {
@@ -129,17 +130,24 @@ export class IntegratedScrapingService {
   async procesarUrls(urls) {
     console.log(chalk.blue('\n🚀 PROCESANDO URLs CON SESIONES PRE-AUTENTICADAS (MODO OPTIMIZADO)\n'));
     
-    // Categorizar URLs para mostrar información
-    const urlsInstagram = urls.filter(url => this.esUrlInstagram(url));
-    const urlsFacebook = urls.filter(url => this.esUrlFacebook(url));
-    const urlsOtros = urls.filter(url => !this.esUrlInstagram(url) && !this.esUrlFacebook(url));
+    // OPTIMIZADO: Categorizar URLs en una sola pasada
+    const categorias = urls.reduce((acc, url) => {
+      if (this.esUrlInstagram(url)) {
+        acc.instagram.push(url);
+      } else if (this.esUrlFacebook(url)) {
+        acc.facebook.push(url);
+      } else {
+        acc.otros.push(url);
+      }
+      return acc;
+    }, { instagram: [], facebook: [], otros: [] });
 
-    console.log(chalk.cyan(`📱 Instagram: ${urlsInstagram.length} URLs`));
-    console.log(chalk.cyan(`📘 Facebook: ${urlsFacebook.length} URLs`));
-    console.log(chalk.cyan(`🌐 Otros sitios: ${urlsOtros.length} URLs`));
+    console.log(chalk.cyan(`📱 Instagram: ${categorias.instagram.length} URLs`));
+    console.log(chalk.cyan(`📘 Facebook: ${categorias.facebook.length} URLs`));
+    console.log(chalk.cyan(`🌐 Otros sitios: ${categorias.otros.length} URLs`));
 
     // 🔐 VALIDAR AUTENTICACIÓN CRÍTICA
-    await this.validarAutenticacionRequerida(urlsFacebook, urlsInstagram);
+    await this.validarAutenticacionRequerida(categorias.facebook, categorias.instagram);
 
     console.log(chalk.green(`✅ Validación exitosa - iniciando procesamiento paralelo optimizado`));
     console.log(chalk.yellow(`🚀 Procesamiento: ${this.configuracion.screenshots.concurrencia} URLs simultáneas`));
@@ -176,29 +184,22 @@ export class IntegratedScrapingService {
         
         console.log(chalk.green(`✅ [${numero}/${total}] Completado: ${url}`));
         
-        // Espera reducida entre URLs - OPTIMIZADO: 2s en lugar de 8s
+        // Espera reducida entre URLs - OPTIMIZADO: 800ms en lugar de 8s
         if (i < urls.length - 1) {
           console.log(chalk.gray(`⏳ Esperando estabilización...`));
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 800));
         }
         
       } catch (error) {
         console.error(chalk.red(`❌ [${numero}/${total}] Error: ${error.message}`));
         
-        // Agregar resultado de error para mantener el orden
-        resultados.push({
-          url,
-          tipo: this.determinarTipoUrl(url),
-          exito: false,
-          error: error.message,
-          screenshot: null,
-          datos: null
-        });
+        // OPTIMIZADO: Usar método estandarizado
+        resultados.push(this.crearResultadoError(url, error.message));
         
         // Espera reducida también en caso de error - OPTIMIZADO
         if (i < urls.length - 1) {
           console.log(chalk.gray(`⏳ Esperando estabilización...`));
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, 800));
         }
       }
     }
@@ -240,30 +241,22 @@ export class IntegratedScrapingService {
         
         console.log(chalk.blue(`[${numeroGlobal}/${total}] Iniciando: ${url}`));
         
-        // Iniciar procesamiento
-        const promesa = (async () => {
-          try {
-            const resultado = await this.procesarUrlParaScreenshot(url, true); // true = modo paralelo
+        // OPTIMIZADO: Iniciar procesamiento con manejo de error simplificado
+        const promesa = this.procesarUrlParaScreenshot(url, true)
+          .then(resultado => {
             console.log(chalk.green(`✅ [${numeroGlobal}/${total}] Completado: ${url}`));
             return resultado;
-          } catch (error) {
+          })
+          .catch(error => {
             console.error(chalk.red(`❌ [${numeroGlobal}/${total}] Error: ${error.message}`));
-            return {
-              url,
-              tipo: this.determinarTipoUrl(url),
-              exito: false,
-              error: error.message,
-              screenshot: null,
-              datos: null
-            };
-          }
-        })();
+            return this.crearResultadoError(url, error.message);
+          });
         
         promesas.push(promesa);
         
         // Delay entre inicios para que las pestañas se carguen escalonadas
         if (idx < lote.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
+          await new Promise(resolve => setTimeout(resolve, 800));
         }
       }
       
@@ -275,7 +268,7 @@ export class IntegratedScrapingService {
       // Pequeña pausa entre lotes para estabilidad (solo si hay más lotes)
       if (i + concurrencia < urls.length) {
         console.log(chalk.gray(`\n⏳ Pausa breve antes del siguiente lote...\n`));
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
       
       // Mostrar progreso
@@ -329,9 +322,9 @@ export class IntegratedScrapingService {
         const resultado = await promesa;
         resultadosLote.push({ status: 'fulfilled', value: resultado });
         
-        // Espera entre cada dominio para evitar sobreposiciones
+        // Espera entre cada dominio para evitar sobreposiciones (OPTIMIZADO)
         console.log(chalk.gray('⏳ Esperando estabilización antes del siguiente dominio...'));
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
       
       // Consolidar resultados
@@ -357,28 +350,28 @@ export class IntegratedScrapingService {
   }
 
   /**
-   * Agrupa URLs por dominio para optimizar la navegación
+   * Agrupa URLs por dominio para optimizar la navegación (OPTIMIZADO)
    */
   agruparUrlsPorDominio(urls) {
-    const grupos = new Map();
-    
-    for (const url of urls) {
+    // OPTIMIZADO: Usar reduce para una sola pasada
+    const grupos = urls.reduce((acc, url) => {
       try {
         const urlObj = new URL(url);
         const dominio = urlObj.hostname;
         
-        if (!grupos.has(dominio)) {
-          grupos.set(dominio, []);
+        if (!acc.has(dominio)) {
+          acc.set(dominio, []);
         }
-        grupos.get(dominio).push(url);
+        acc.get(dominio).push(url);
       } catch (error) {
         // URL inválida, crear grupo especial
-        if (!grupos.has('urls-invalidas')) {
-          grupos.set('urls-invalidas', []);
+        if (!acc.has('urls-invalidas')) {
+          acc.set('urls-invalidas', []);
         }
-        grupos.get('urls-invalidas').push(url);
+        acc.get('urls-invalidas').push(url);
       }
-    }
+      return acc;
+    }, new Map());
     
     // Mostrar agrupación
     console.log(chalk.cyan('\n📂 AGRUPACIÓN POR DOMINIO:'));
@@ -412,27 +405,17 @@ export class IntegratedScrapingService {
           
           console.log(chalk.green(`  ✅ [${numero}/${urlsGrupo.length}] ${dominio}: Completado`));
           
-          // Espera entre URLs para evitar sobreposiciones
+          // Espera entre URLs para evitar sobreposiciones (OPTIMIZADO)
           if (i < urlsGrupo.length - 1) {
             console.log(chalk.gray(`  ⏳ Esperando estabilización antes de la siguiente URL...`));
-            await new Promise(resolve => setTimeout(resolve, 8000));
+            await new Promise(resolve => setTimeout(resolve, 1500));
           }
           
         } catch (error) {
           console.error(chalk.red(`  ❌ [${numero}/${urlsGrupo.length}] ${dominio}: ${error.message}`));
           
-          resultados.push({
-            url: url,
-            tipo: this.determinarTipoUrl(url),
-            exito: false,
-            screenshot: {
-              exito: false,
-              error: error.message,
-              tipoError: 'screenshot_error'
-            },
-            datos: null,
-            timestamp: new Date().toISOString()
-          });
+          // OPTIMIZADO: Usar método estandarizado
+          resultados.push(this.crearResultadoError(url, error.message));
         }
       }
       
@@ -518,15 +501,14 @@ export class IntegratedScrapingService {
     try {
       let datosScraping = null;
       
-      // Ejecutar scraping para Facebook e Instagram usando scripts de Python
-      if (tipo === 'facebook') {
-        console.log(chalk.cyan(`🔍 Ejecutando scraping de Facebook: ${urlLimpia}`));
-        datosScraping = await this.ejecutarScrapingFacebook(urlLimpia);
-        this.contadorCapturas.facebook++;
-      } else if (tipo === 'instagram') {
+      // 🚀 OPTIMIZACIÓN: Solo scraping para Instagram (Facebook usa solo JavaScript/Playwright)
+      if (tipo === 'instagram') {
         console.log(chalk.cyan(`🔍 Ejecutando scraping de Instagram: ${urlLimpia}`));
         datosScraping = await this.ejecutarScrapingInstagram(urlLimpia);
         this.contadorCapturas.instagram++;
+      } else if (tipo === 'facebook') {
+        console.log(chalk.cyan(`📸 Facebook: usando solo JavaScript/Playwright (sin Python)`));
+        this.contadorCapturas.facebook++;
       }
       
       // Capturar screenshot con nombre personalizado basado en la URL
@@ -534,35 +516,101 @@ export class IntegratedScrapingService {
       const nombreBase = this.generarNombreBaseDesdeUrl(urlLimpia, tipo);
       const screenshot = await this.screenshotService.capturarScreenshot(urlLimpia, 0, true, nombreBase, modoParalelo);
       
-      // Evaluar contenido basado en scraping Y screenshot (priorizar screenshot)
-      const evaluacionContenido = this.evaluarContenidoBasadoEnScraping(datosScraping, tipo, screenshot.exito);
+      // DETECTAR REDIRECCIÓN A COLJUEGOS (sitio bloqueado por autoridades colombianas)
+      const urlFinal = screenshot.urlFinal || screenshot.url || urlLimpia;
+      const esBloqueadoPorColjuegos = urlFinal.includes('coljuegos.gov.co');
+      
+      if (esBloqueadoPorColjuegos) {
+        console.log(chalk.red(`🚫 SITIO BLOQUEADO POR COLJUEGOS: ${urlLimpia} → ${urlFinal}`));
+        console.log(chalk.yellow(`⚠️ Este sitio de apuestas es ilegal en Colombia según Coljuegos`));
+        
+        // Retornar inmediatamente como bloqueado
+        return {
+          url: urlLimpia, // URL original
+          urlFinal: urlFinal, // URL de redirección (Coljuegos)
+          tipo,
+          exito: false, // Marcar como no exitoso porque está bloqueado
+          bloqueadoPorColjuegos: true,
+          screenshot: {
+            ...screenshot,
+            urlOriginal: urlLimpia, // Guardar URL original
+            urlRedireccion: urlFinal // URL de redirección
+          },
+          datos: null,
+          evaluacionContenido: { 
+            tieneContenido: false, 
+            razon: 'Bloqueado por Coljuegos (Colombia)',
+            detalles: `Sitio de apuestas ilegal redirigido a ${urlFinal}`
+          },
+          estado: 'BLOQUEADO_COLJUEGOS',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      // DEBUG: Verificar flags del screenshot
+      if (screenshot.paginaBloqueada) {
+        console.log(chalk.red(`🚫 FLAG DE BLOQUEO DETECTADO: ${screenshot.razonBloqueo}`));
+      }
+      
+      // Evaluar contenido basado en JavaScript/Playwright (prioridad) y scraping (solo Instagram)
+      const evaluacionContenido = this.evaluarContenidoBasadoEnScraping(datosScraping, tipo, screenshot.exito, screenshot);
       
       // Análisis mejorado del estado
       let estadoFinal = 'ACCESIBLE';
       let mensajeEstado = '';
       
-      if (screenshot.exito && (!datosScraping || !datosScraping.exito)) {
-        // Screenshot OK pero scraping falló
-        if (datosScraping?.datos?.es_contenido_especifico) {
-          estadoFinal = 'CONTENIDO_ESPECIFICO';
-          mensajeEstado = `${datosScraping.datos.tipo_contenido} específico - revisar screenshot para estado`;
-        } else if (datosScraping?.datos?.requiere_login) {
-          estadoFinal = 'PRIVADO';
-          mensajeEstado = 'Página privada (requiere login) - EXISTE pero no es público';
-        } else {
+      // FACEBOOK: Solo JavaScript/Playwright (sin Python)
+      if (tipo === 'facebook') {
+        if (screenshot.exito && !screenshot.paginaBloqueada) {
           estadoFinal = 'ACCESIBLE';
-          mensajeEstado = 'Perfil ACCESIBLE (scraping falló pero screenshot OK)';
+          mensajeEstado = 'Página ACCESIBLE (validado con JavaScript/Playwright)';
+          console.log(chalk.green(`✅ ${mensajeEstado}`));
+        } else if (screenshot.paginaBloqueada) {
+          estadoFinal = 'BLOQUEADO';
+          mensajeEstado = `Página BLOQUEADA/NO ENCONTRADA: ${screenshot.razonBloqueo}`;
+          console.log(chalk.red(`🚫 ${mensajeEstado}`));
+        } else {
+          estadoFinal = 'ERROR';
+          mensajeEstado = 'Error al acceder a la página';
+          console.log(chalk.red(`❌ ${mensajeEstado}`));
         }
-        console.log(chalk.green(`✅ ${mensajeEstado}`));
-      } else if (screenshot.exito && datosScraping?.exito) {
-        estadoFinal = 'COMPLETO';
-        console.log(chalk.green(`✅ Screenshot Y scraping exitosos`));
+      }
+      // INSTAGRAM: Scraping + JavaScript/Playwright
+      else if (tipo === 'instagram') {
+        if (screenshot.exito && (!datosScraping || !datosScraping.exito)) {
+          // Screenshot OK pero scraping falló
+          if (datosScraping?.datos?.es_contenido_especifico) {
+            estadoFinal = 'CONTENIDO_ESPECIFICO';
+            mensajeEstado = `${datosScraping.datos.tipo_contenido} específico - revisar screenshot para estado`;
+          } else if (datosScraping?.datos?.requiere_login) {
+            estadoFinal = 'PRIVADO';
+            mensajeEstado = 'Página privada (requiere login) - EXISTE pero no es público';
+          } else {
+            estadoFinal = 'ACCESIBLE';
+            mensajeEstado = 'Perfil ACCESIBLE (scraping falló pero screenshot OK)';
+          }
+          console.log(chalk.green(`✅ ${mensajeEstado}`));
+        } else if (screenshot.exito && datosScraping?.exito) {
+          estadoFinal = 'COMPLETO';
+          mensajeEstado = 'Screenshot Y scraping exitosos';
+          console.log(chalk.green(`✅ ${mensajeEstado}`));
+        }
+      }
+      // OTROS SITIOS: Solo screenshot
+      else {
+        if (screenshot.exito) {
+          estadoFinal = 'ACCESIBLE';
+          mensajeEstado = 'Sitio ACCESIBLE';
+          console.log(chalk.green(`✅ ${mensajeEstado}`));
+        }
       }
       
       return {
         url: urlLimpia, // Usar URL limpia
+        urlFinal: urlFinal, // URL final (puede ser diferente si hubo redirección)
         tipo,
         exito: screenshot.exito,
+        bloqueadoPorColjuegos: false,
         screenshot,
         datos: datosScraping, // Datos del scraping de Python
         evaluacionContenido, // Nueva evaluación de contenido
@@ -573,19 +621,8 @@ export class IntegratedScrapingService {
     } catch (error) {
       console.log(chalk.red(`❌ Error procesando ${url}: ${error.message}`));
       
-      return {
-        url,
-        tipo,
-        exito: false,
-        screenshot: {
-          exito: false,
-          error: error.message,
-          tipoError: 'screenshot_error'
-        },
-        datos: null,
-        evaluacionContenido: { tieneContenido: false, razon: 'Error en procesamiento' },
-        timestamp: new Date().toISOString()
-      };
+      // OPTIMIZADO: Usar método estandarizado
+      return this.crearResultadoError(url, error.message);
     }
   }
 
@@ -630,10 +667,21 @@ export class IntegratedScrapingService {
       const { join } = await import('path');
       const { readFileSync, existsSync } = await import('fs');
       
-      // Extraer nombre de página de la URL
+      
       const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
       const pathParts = urlObj.pathname.split('/').filter(p => p);
-      const pageName = pathParts[0] || '';
+      
+      // Manejar URLs con parámetro id (ej: profile.php?id=123456)
+      let pageName = pathParts[0] || '';
+      
+      if (pageName === 'profile.php' || pageName === 'profile') {
+        // Extraer el ID del query string
+        const idParam = urlObj.searchParams.get('id');
+        if (idParam) {
+          pageName = idParam;
+          console.log(chalk.cyan(`🔍 URL con parámetro ID detectada: profile.php?id=${idParam}`));
+        }
+      }
       
       // Detectar si es una URL de video/post específico (puede estar eliminado)
       const esVideo = pathParts.includes('videos') || pathParts.includes('posts') || pathParts.includes('watch');
@@ -687,7 +735,7 @@ export class IntegratedScrapingService {
       const resultado = execSync(comando, { 
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024,
-        timeout: 60000
+        timeout: 30000 // Reducido a 30s para Facebook (optimizado)
       });
       
       // Extraer solo la última línea JSON
@@ -755,14 +803,14 @@ export class IntegratedScrapingService {
         directorio: 'scraped_data',
         maxPosts: 5,
         cookies: cookiesData, // Pasar las cookies al script de Python
-        delay: 3 // Añadir delay para evitar rate limiting
+        delay: 1 // Reducido a 1s para velocidad (optimizado)
       });
       
       const comando = `${venvPython} "${scriptPath}" '${parametros}'`;
       const resultado = execSync(comando, { 
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024,
-        timeout: 90000 // Aumentar timeout para Instagram
+        timeout: 45000 // Reducido a 45s para Instagram (optimizado)
       });
       
       // Extraer solo la última línea JSON
@@ -794,168 +842,47 @@ export class IntegratedScrapingService {
   }
 
   /**
-   * Evalúa el contenido basado en los datos de scraping
-   * IMPORTANTE: Si el scraping falla pero el screenshot existe, NO marcar como bloqueado
+   * Evalúa el contenido basado SOLO en el navegador JavaScript (Playwright)
+   * El navegador ve el contenido REAL renderizado, es la fuente más confiable
    */
-  evaluarContenidoBasadoEnScraping(datosScraping, tipo, screenshotExitoso = false) {
-    // Si el scraping falló pero el screenshot es exitoso, considerar que SÍ tiene contenido
-    if ((!datosScraping || !datosScraping.exito) && screenshotExitoso) {
-      return {
-        tieneContenido: true,
-        razon: 'Screenshot exitoso (scraping falló pero página accesible)',
-        detalles: 'El perfil/página está disponible aunque no se pudo extraer datos'
-      };
-    }
-
-    // Si ambos fallaron
-    if (!datosScraping || !datosScraping.exito) {
+  evaluarContenidoBasadoEnScraping(datosScraping, tipo, screenshotExitoso = false, screenshot = null) {
+    // ⚠️ USAR SOLO JAVASCRIPT: El navegador ve el contenido REAL renderizado
+    // Python solo ve HTML inicial y tiene rate limiting
+    if (screenshot && screenshot.paginaBloqueada) {
       return {
         tieneContenido: false,
-        razon: 'Scraping y screenshot fallaron',
-        detalles: datosScraping?.error || 'Sin datos'
-      };
-    }
-
-    const datos = datosScraping.datos || datosScraping;
-
-    if (tipo === 'facebook') {
-      return this.evaluarContenidoFacebook(datos);
-    } else if (tipo === 'instagram') {
-      return this.evaluarContenidoInstagram(datos);
-    } else {
-      return {
-        tieneContenido: true, // Para sitios normales asumimos que tienen contenido
-        razon: 'Sitio web normal',
-        detalles: 'No requiere evaluación especial'
-      };
-    }
-  }
-
-  /**
-   * Evalúa contenido específico de Facebook (CORREGIDO - requiere login ≠ bloqueado)
-   */
-  evaluarContenidoFacebook(datos) {
-    // Caso especial: Videos/Posts específicos (verificar con screenshot)
-    if (datos.es_contenido_especifico === true) {
-      return {
-        tieneContenido: true, // Asumimos que existe, el screenshot dirá si está bloqueado
-        razon: `${datos.tipo_contenido} específico (verificar screenshot)`,
-        detalles: `URL de ${datos.tipo_contenido} - la disponibilidad se verifica visualmente`
+        razon: 'Página bloqueada/no encontrada (detectado por navegador)',
+        detalles: screenshot.razonBloqueo || 'Página no disponible'
       };
     }
     
-    // Verificar si la página NO EXISTE (404, eliminada, bloqueada de verdad)
-    if (datos.pagina_existe === false) {
-      // Casos específicos de páginas realmente bloqueadas
-      if (datos.error && (datos.error.includes('404') || datos.error.includes('not found'))) {
-      return {
-        tieneContenido: false,
-          razon: 'Página bloqueada/eliminada',
-          detalles: 'La página no existe o fue eliminada'
-      };
-    }
-
-      return {
-        tieneContenido: false,
-        razon: 'Página no encontrada',
-        detalles: 'La página de Facebook no fue encontrada'
-      };
-    }
-
-    // IMPORTANTE: Requiere login NO significa bloqueado
-    // Si requiere login, la página EXISTE pero es privada
-    if (datos.requiere_login === true) {
-      return {
-        tieneContenido: true, // CAMBIO: Existe aunque sea privada
-        razon: 'Página privada (requiere login)',
-        detalles: 'La página existe pero requiere autenticación para ver contenido'
-      };
-    }
-
-    // Verificar si hay posts o contenido visible
-    const tienePosts = datos.posts_recientes && datos.posts_recientes.length > 0;
-    const tieneImagenPerfil = datos.imagen_perfil_descargada === true;
-    const tieneTitulo = datos.titulo && datos.titulo.trim() !== '';
-    const tieneDescripcion = datos.descripcion && datos.descripcion.trim() !== '';
-
-    // Si tiene título, descripción, imagen o posts -> tiene contenido
-    if (tienePosts || tieneImagenPerfil || tieneTitulo || tieneDescripcion) {
+    // Si el screenshot fue exitoso y NO está bloqueado, la página existe
+    if (screenshotExitoso && screenshot && !screenshot.paginaBloqueada) {
       return {
         tieneContenido: true,
-        razon: 'Contenido disponible',
-        detalles: `Posts: ${datos.posts_recientes?.length || 0}, Imagen perfil: ${tieneImagenPerfil ? 'Sí' : 'No'}`
+        razon: 'Página disponible (verificado por navegador)',
+        detalles: 'El navegador pudo acceder y renderizar la página correctamente'
       };
     }
-
-    // Si no hay nada, podría ser página vacía pero que existe
-    return {
-      tieneContenido: true, // Asumimos que existe aunque esté vacía
-      razon: 'Página existe (sin contenido visible)',
-      detalles: 'La página existe pero no se pudo extraer contenido público'
-    };
-  }
-
-  /**
-   * Evalúa contenido específico de Instagram (MEJORADO - menos falsos positivos)
-   */
-  evaluarContenidoInstagram(datos) {
-    // Verificar si el usuario existe EXPLÍCITAMENTE
-    if (datos.usuario_existe === false) {
+    
+    // Si el screenshot falló completamente
+    if (!screenshotExitoso) {
       return {
         tieneContenido: false,
-        razon: 'Usuario no existe',
-        detalles: 'El perfil de Instagram no fue encontrado'
+        razon: 'No se pudo acceder a la página',
+        detalles: 'El navegador no pudo cargar la página'
       };
     }
-
-    // Verificar si está bloqueado EXPLÍCITAMENTE por rate limiting
-    if (datos.bloqueado === true && datos.razon === 'Rate limiting') {
-      return {
-        tieneContenido: false,
-        razon: 'Rate limiting temporal',
-        detalles: 'Instagram bloqueó temporalmente - reintentar más tarde'
-      };
-    }
-
-    // Verificar si es cuenta privada (pero EXISTE)
-    if (datos.privado === true) {
-      return {
-        tieneContenido: true, // CAMBIO: privado NO significa bloqueado
-        razon: 'Cuenta privada (pero existe)',
-        detalles: 'El perfil existe pero es privado'
-      };
-    }
-
-    // Verificar si tiene contenido (posts o imagen de perfil)
-    const tienePosts = datos.posts && datos.posts.length > 0;
-    const tieneImagenPerfil = datos.imagen_perfil_descargada === true;
-    const tieneSeguidores = datos.followers && datos.followers !== 'N/A';
-    const tieneUsername = datos.username && datos.username !== '';
-
-    // Si tiene username o seguidores, el perfil EXISTE aunque no tenga posts/foto
-    if (tieneUsername || tieneSeguidores) {
-      return {
-        tieneContenido: true,
-        razon: 'Perfil activo',
-        detalles: `Username: ${datos.username || 'N/A'}, Seguidores: ${datos.followers || 'N/A'}`
-      };
-    }
-
-    // Solo marcar como sin contenido si REALMENTE no hay nada
-    if (!tienePosts && !tieneImagenPerfil && !tieneUsername && !tieneSeguidores) {
-      return {
-        tieneContenido: false,
-        razon: 'Sin datos detectables',
-        detalles: 'No se pudo extraer información del perfil'
-      };
-    }
-
+    
+    // Si llegamos aquí: screenshot exitoso y NO bloqueado
+    // La página existe y es accesible
     return {
       tieneContenido: true,
-      razon: 'Contenido disponible',
-      detalles: `Posts: ${datos.posts?.length || 0}, Seguidores: ${datos.followers || 'N/A'}, Imagen perfil: ${tieneImagenPerfil ? 'Sí' : 'No'}`
+      razon: 'Página accesible',
+      detalles: 'La página se cargó correctamente en el navegador'
     };
   }
+
 
   /**
    * Determina el tipo de URL (instagram, facebook, otro)
@@ -968,6 +895,26 @@ export class IntegratedScrapingService {
     } else {
       return 'otro';
     }
+  }
+
+  /**
+   * Crea un objeto de resultado de error estandarizado (NUEVO - evita duplicación)
+   */
+  crearResultadoError(url, mensajeError) {
+    return {
+      url,
+      tipo: this.determinarTipoUrl(url),
+      exito: false,
+      error: mensajeError,
+      screenshot: {
+        exito: false,
+        error: mensajeError,
+        tipoError: 'screenshot_error'
+      },
+      datos: null,
+      evaluacionContenido: { tieneContenido: false, razon: 'Error en procesamiento' },
+      timestamp: new Date().toISOString()
+    };
   }
 
 

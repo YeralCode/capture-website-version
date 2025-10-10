@@ -76,7 +76,6 @@ class IntegratedScrapingAutomation {
       // Inicializar servicios integrados
       this.integratedService = new IntegratedScrapingService(this.configuracion);
       this.pdfGenerator = new PDFGenerator();
-      this.wordGenerator = new WordGenerator();
 
       spinner.succeed('✅ Servicios integrados inicializados correctamente');
       
@@ -136,8 +135,9 @@ class IntegratedScrapingAutomation {
         return;
       }
 
-      // Paso 2: Filtrar URLs válidas (opcional)
-      const urlsFinales = this.configuracion.red.validarUrls ? 
+      // Paso 2: Filtrar URLs válidas (OPTIMIZADO: Desactivado por defecto para mayor velocidad)
+      // La validación HTTP previa ralentiza el proceso, se hace validación al capturar
+      const urlsFinales = this.configuracion.red?.validarUrls === true ? 
         await this.validarUrls(urls) : urls;
 
       // Paso 2.5: Mostrar análisis de URLs y autenticación requerida
@@ -146,9 +146,13 @@ class IntegratedScrapingAutomation {
       // Paso 3: Procesar URLs con scraping y capturas
       const resultados = await this.procesarUrls(urlsFinales);
 
-      // Paso 4: Generar PDF y Word con datos extraídos y screenshots
-      const rutaPdf = await this.generarReportePDF(resultados);
-      const rutaDocx = await this.generarReporteWord(resultados);
+      // Paso 4: Generar reportes con datos extraídos y screenshots (OPTIMIZADO)
+      // Preparar datos una sola vez para ambos formatos
+      console.log(chalk.blue('\n📊 PREPARANDO DATOS PARA REPORTES...\n'));
+      const datosReporte = this.prepararDatosParaPDF(resultados);
+      
+      const rutaPdf = await this.generarReportePDF(resultados, datosReporte);
+      const rutaDocx = await this.generarReporteWord(resultados, datosReporte);
 
       // Paso 5: Mostrar resumen final
       this.mostrarResumenFinal(resultados, rutaPdf, rutaDocx);
@@ -190,12 +194,18 @@ class IntegratedScrapingAutomation {
     
     try {
       // Lista de archivos de URLs a procesar
+      // Puede ser string simple o { archivo, protocolo } para especificar HTTP/HTTPS
       const archivosUrls = [
+        // URLs de redes sociales (HTTPS por defecto)
+        // '289_perfiles_redes_sociales_10_12_2024_LIMPIO.txt',
+        
+        // URLs de sitios web (HTTP - sitios de casinos/apuestas)
+        { archivo: '1203_SITIOS_WEB_11_2024.txt', protocolo: 'http' },
+        
+        // Otros archivos (comentados)
         // 'urls_test_login.txt',        // URLs de prueba para login
-        // 'urls_test_final.txt'        // URLs de prueba final
+        // 'urls_test_final.txt',        // URLs de prueba final
         // 'urls_prueba.txt',
-        '289_perfiles_redes_sociales_10_12_2024_LIMPIO.txt',
-        // '1203_SITIOS_WEB_11_2024.txt',   // URLs principales de prueba
         // '2415 sitios web_dic_2024.txt'
         // 'urls_prueba_test.txt'        // URLs de prueba (primeras 5)
       ];
@@ -233,51 +243,53 @@ class IntegratedScrapingAutomation {
   }
 
   /**
-   * Analiza las URLs y verifica si la autenticación es suficiente
+   * Analiza las URLs y verifica si la autenticación es suficiente (OPTIMIZADO)
    */
   async analizarUrlsYAutenticacion(urls) {
     console.log(chalk.blue('\n🔍 ANÁLISIS DE URLs Y AUTENTICACIÓN REQUERIDA\n'));
     
-    // Categorizar URLs
-    const urlsInstagram = urls.filter(url => url.includes('instagram.com'));
-    const urlsFacebook = urls.filter(url => url.includes('facebook.com'));
-    const urlsOtros = urls.filter(url => !url.includes('instagram.com') && !url.includes('facebook.com'));
+    // Categorizar URLs (OPTIMIZADO: Una sola pasada)
+    const categorias = urls.reduce((acc, url) => {
+      if (url.includes('instagram.com')) {
+        acc.instagram++;
+      } else if (url.includes('facebook.com')) {
+        acc.facebook++;
+      } else {
+        acc.otros++;
+      }
+      return acc;
+    }, { instagram: 0, facebook: 0, otros: 0 });
     
     // Mostrar resumen
     console.log(chalk.cyan('📊 RESUMEN DE URLs:'));
-    console.log(chalk.gray(`  📱 Instagram: ${urlsInstagram.length} URLs`));
-    console.log(chalk.gray(`  📘 Facebook: ${urlsFacebook.length} URLs`));
-    console.log(chalk.gray(`  🌐 Otros sitios: ${urlsOtros.length} URLs`));
+    console.log(chalk.gray(`  📱 Instagram: ${categorias.instagram} URLs`));
+    console.log(chalk.gray(`  📘 Facebook: ${categorias.facebook} URLs`));
+    console.log(chalk.gray(`  🌐 Otros sitios: ${categorias.otros} URLs`));
     console.log(chalk.gray(`  📋 Total: ${urls.length} URLs\n`));
     
     // Verificar autenticación requerida
-    let requiereValidacion = false;
+    const requiereAuth = categorias.facebook > 0 || categorias.instagram > 0;
     
-    if (urlsFacebook.length > 0 || urlsInstagram.length > 0) {
+    if (requiereAuth) {
       console.log(chalk.yellow('🔐 AUTENTICACIÓN REQUERIDA:'));
-      
-      if (urlsFacebook.length > 0) {
-        console.log(chalk.yellow(`  📘 Facebook: Requerido para ${urlsFacebook.length} URLs`));
-        requiereValidacion = true;
+      if (categorias.facebook > 0) {
+        console.log(chalk.yellow(`  📘 Facebook: Requerido para ${categorias.facebook} URLs`));
       }
-      
-      if (urlsInstagram.length > 0) {
-        console.log(chalk.yellow(`  📱 Instagram: Requerido para ${urlsInstagram.length} URLs`));
-        requiereValidacion = true;
+      if (categorias.instagram > 0) {
+        console.log(chalk.yellow(`  📱 Instagram: Requerido para ${categorias.instagram} URLs`));
       }
-      
       console.log(chalk.blue('\n🔄 La validación de autenticación se realizará antes del procesamiento...'));
     } else {
       console.log(chalk.green('✅ No se requiere autenticación especial (solo URLs normales)'));
     }
     
-    if (urlsOtros.length > 0) {
-      console.log(chalk.cyan(`🌐 URLs normales: ${urlsOtros.length} se procesarán directamente\n`));
+    if (categorias.otros > 0) {
+      console.log(chalk.cyan(`🌐 URLs normales: ${categorias.otros} se procesarán directamente\n`));
     }
   }
 
   /**
-   * Procesa URLs con scraping y capturas (las sesiones ya están iniciadas)
+   * Procesa URLs con scraping y capturas (OPTIMIZADO - sesiones ya están iniciadas)
    */
   async procesarUrls(urls) {
     console.log(chalk.blue('\n📸 PROCESANDO URLs CON SESIONES PRE-AUTENTICADAS\n'));
@@ -286,17 +298,25 @@ class IntegratedScrapingAutomation {
     
     const resultados = await this.integratedService.procesarUrls(urls);
 
-    // Actualizar estadísticas
-    this.estadisticas.urlsExitosas = resultados.filter(r => r.exito).length;
-    this.estadisticas.urlsFallidas = resultados.filter(r => !r.exito).length;
+    // Actualizar estadísticas (OPTIMIZADO: Una sola pasada)
+    const stats = resultados.reduce((acc, r) => {
+      if (r.exito) acc.exitosas++;
+      else acc.fallidas++;
+      return acc;
+    }, { exitosas: 0, fallidas: 0 });
+
+    this.estadisticas.urlsExitosas = stats.exitosas;
+    this.estadisticas.urlsFallidas = stats.fallidas;
 
     return resultados;
   }
 
   /**
-   * Genera el reporte PDF con datos extraídos y screenshots
+   * Genera el reporte PDF con datos extraídos y screenshots (OPTIMIZADO)
+   * @param {Array} resultados - Resultados del procesamiento
+   * @param {Array} datosPreparados - Datos ya preparados (opcional, para evitar duplicación)
    */
-  async generarReportePDF(resultados) {
+  async generarReportePDF(resultados, datosPreparados = null) {
     console.log(chalk.blue('\n📄 GENERANDO REPORTE PDF INTEGRADO\n'));
     
     const spinner = ora('Generando PDF con datos extraídos...').start();
@@ -305,24 +325,28 @@ class IntegratedScrapingAutomation {
       const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
       const nombreArchivo = `reporte-integrado-${timestamp}.pdf`;
       
-      // Crear datos para el PDF que incluyan tanto screenshots como datos extraídos
-      const datosParaPDF = this.prepararDatosParaPDF(resultados);
+      // OPTIMIZADO: Usar datos preparados si están disponibles
+      const datosParaPDF = datosPreparados || this.prepararDatosParaPDF(resultados);
       
+      spinner.text = `Generando PDF con ${datosParaPDF.length} resultados...`;
       const rutaPdf = await this.pdfGenerator.generarPDF(datosParaPDF, nombreArchivo);
       
-      spinner.succeed(chalk.green('✅ PDF integrado generado exitosamente'));
+      spinner.succeed(chalk.green(`✅ PDF integrado generado: ${datosParaPDF.length} páginas`));
       return rutaPdf;
       
     } catch (error) {
-      spinner.fail('❌ Error al generar PDF');
-      throw error;
+      spinner.fail(chalk.red('❌ Error al generar PDF: ' + error.message));
+      console.error(chalk.gray('Se intentará continuar sin PDF...'));
+      return null; // Continuar sin PDF si falla
     }
   }
 
   /**
-   * Genera el reporte Word con datos extraídos y screenshots
+   * Genera el reporte Word con datos extraídos y screenshots (OPTIMIZADO)
+   * @param {Array} resultados - Resultados del procesamiento
+   * @param {Array} datosPreparados - Datos ya preparados (opcional, para evitar duplicación)
    */
-  async generarReporteWord(resultados) {
+  async generarReporteWord(resultados, datosPreparados = null) {
     console.log(chalk.blue('\n📝 GENERANDO REPORTE WORD (.docx)\n'));
     
     const spinner = ora('Generando Word con datos extraídos...').start();
@@ -331,68 +355,68 @@ class IntegratedScrapingAutomation {
       const timestamp = new Date().toISOString().slice(0, 19).replace(/[:.]/g, '-');
       const nombreArchivo = `reporte-integrado-${timestamp}.docx`;
       
-      // Crear datos para el Word que incluyan tanto screenshots como datos extraídos
-      const datosParaWord = this.prepararDatosParaPDF(resultados);
+      // OPTIMIZADO: Usar datos preparados si están disponibles
+      const datosParaWord = datosPreparados || this.prepararDatosParaPDF(resultados);
       
+      spinner.text = `Generando Word con ${datosParaWord.length} resultados...`;
       const rutaDocx = await this.wordGenerator.generarDOCX(datosParaWord, nombreArchivo);
       
-      spinner.succeed(chalk.green('✅ Word integrado generado exitosamente'));
+      spinner.succeed(chalk.green(`✅ Word integrado generado: ${datosParaWord.length} páginas`));
       return rutaDocx;
       
     } catch (error) {
-      spinner.fail('❌ Error al generar Word');
-      throw error;
+      spinner.fail(chalk.red('❌ Error al generar Word: ' + error.message));
+      console.error(chalk.gray('Se intentará continuar sin Word...'));
+      return null; // Continuar sin Word si falla
     }
   }
 
   /**
-   * Prepara los datos para el PDF incluyendo screenshots y datos extraídos
+   * Prepara los datos para el PDF incluyendo screenshots y datos extraídos (OPTIMIZADO)
    */
   prepararDatosParaPDF(resultados) {
-    return resultados.map(resultado => ({
-      url: resultado.url,
-      tipo: resultado.tipo,
-      exito: resultado.exito,
-      timestamp: resultado.timestamp,
-      screenshot: resultado.screenshot,
-      datosScraping: resultado.datos,  // Cambiado de datosExtraidos a datosScraping
-      resumen: this.generarResumenResultado(resultado)
-    }));
-  }
+    return resultados.map(resultado => {
+      const datosBase = {
+        url: resultado.url,
+        tipo: resultado.tipo,
+        exito: resultado.exito,
+        timestamp: resultado.timestamp,
+        screenshot: resultado.screenshot,
+        datosScraping: resultado.datos,
+        evaluacionContenido: resultado.evaluacionContenido, // NUEVO: Incluir evaluación de contenido
+        resumen: {
+          url: resultado.url,
+          tipo: resultado.tipo,
+          exito: resultado.exito
+        }
+      };
 
-  /**
-   * Genera un resumen de cada resultado
-   */
-  generarResumenResultado(resultado) {
-    const resumen = {
-      url: resultado.url,
-      tipo: resultado.tipo,
-      exito: resultado.exito
-    };
+      // Agregar datos específicos de scraping al resumen
+      if (resultado.datos?.exito) {
+        if (resultado.tipo === 'instagram') {
+          datosBase.resumen.datosInstagram = {
+            username: resultado.datos.datos?.username,
+            followers: resultado.datos.datos?.followers,
+            posts: resultado.datos.datos?.posts?.length || 0
+          };
+        } else if (resultado.tipo === 'facebook') {
+          datosBase.resumen.datosFacebook = {
+            pageName: resultado.datos.datos?.pageName,
+            posts: resultado.datos.datos?.posts?.length || 0
+          };
+        }
+      }
 
-    if (resultado.datos && resultado.datos.exito) {
-      if (resultado.tipo === 'instagram') {
-        resumen.datosInstagram = {
-          username: resultado.datos.datos?.username,
-          followers: resultado.datos.datos?.followers,
-          posts: resultado.datos.datos?.posts?.length || 0
-        };
-      } else if (resultado.tipo === 'facebook') {
-        resumen.datosFacebook = {
-          pageName: resultado.datos.datos?.pageName,
-          posts: resultado.datos.datos?.posts?.length || 0
+      // Agregar info de screenshot al resumen
+      if (resultado.screenshot?.exito) {
+        datosBase.resumen.screenshot = {
+          archivo: resultado.screenshot.nombreArchivo,
+          tamanio: resultado.screenshot.tamanio
         };
       }
-    }
 
-    if (resultado.screenshot && resultado.screenshot.exito) {
-      resumen.screenshot = {
-        archivo: resultado.screenshot.nombreArchivo,
-        tamanio: resultado.screenshot.tamanio
-      };
-    }
-
-    return resumen;
+      return datosBase;
+    });
   }
 
   /**
@@ -413,16 +437,23 @@ class IntegratedScrapingAutomation {
   }
 
   /**
-   * Muestra el resumen final de la ejecución
+   * Muestra el resumen final de la ejecución (OPTIMIZADO)
    */
   mostrarResumenFinal(resultados, rutaPdf, rutaDocx) {
     const porcentajeExito = ((this.estadisticas.urlsExitosas / this.estadisticas.totalUrls) * 100).toFixed(1);
     const tiempoMinutos = (this.estadisticas.tiempoTotal / 1000 / 60).toFixed(2);
 
-    // Estadísticas por tipo
-    const instagram = resultados.filter(r => r.tipo === 'instagram');
-    const facebook = resultados.filter(r => r.tipo === 'facebook');
-    const otros = resultados.filter(r => r.tipo === 'otro');
+    // Estadísticas por tipo (OPTIMIZADO: Una sola pasada con reduce)
+    const stats = resultados.reduce((acc, r) => {
+      if (!acc[r.tipo]) {
+        acc[r.tipo] = { total: 0, exitosos: 0, conDatos: 0, conScreenshots: 0 };
+      }
+      acc[r.tipo].total++;
+      if (r.exito) acc[r.tipo].exitosos++;
+      if (r.datos?.exito) acc[r.tipo].conDatos++;
+      if (r.screenshot?.exito) acc[r.tipo].conScreenshots++;
+      return acc;
+    }, {});
 
     console.log(chalk.green.bold('\n🎉 PROCESO INTEGRADO COMPLETADO\n'));
     console.log(chalk.cyan('📊 ESTADÍSTICAS FINALES:'));
@@ -434,22 +465,32 @@ class IntegratedScrapingAutomation {
     console.log(chalk.magenta(`  • PDF generado: ${rutaPdf}`));
     console.log(chalk.magenta(`  • Word generado: ${rutaDocx}`));
 
-    console.log(chalk.cyan('\n📱 INSTAGRAM (SCRAPING + SCREENSHOTS):'));
-    console.log(chalk.gray(`  • URLs: ${instagram.length}`));
-    console.log(chalk.green(`  • Exitosos: ${instagram.filter(r => r.exito).length}`));
-    console.log(chalk.blue(`  • Con datos extraídos: ${instagram.filter(r => r.datos?.exito).length}`));
-    console.log(chalk.blue(`  • Con screenshots: ${instagram.filter(r => r.screenshot?.exito).length}`));
+    // Mostrar estadísticas por tipo (si existen)
+    if (stats.instagram) {
+      const ig = stats.instagram;
+      console.log(chalk.cyan('\n📱 INSTAGRAM (SCRAPING + SCREENSHOTS):'));
+      console.log(chalk.gray(`  • URLs: ${ig.total}`));
+      console.log(chalk.green(`  • Exitosos: ${ig.exitosos}`));
+      console.log(chalk.blue(`  • Con datos extraídos: ${ig.conDatos}`));
+      console.log(chalk.blue(`  • Con screenshots: ${ig.conScreenshots}`));
+    }
 
-    console.log(chalk.cyan('\n📘 FACEBOOK (SCRAPING + SCREENSHOTS):'));
-    console.log(chalk.gray(`  • URLs: ${facebook.length}`));
-    console.log(chalk.green(`  • Exitosos: ${facebook.filter(r => r.exito).length}`));
-    console.log(chalk.blue(`  • Con datos extraídos: ${facebook.filter(r => r.datos?.exito).length}`));
-    console.log(chalk.blue(`  • Con screenshots: ${facebook.filter(r => r.screenshot?.exito).length}`));
+    if (stats.facebook) {
+      const fb = stats.facebook;
+      console.log(chalk.cyan('\n📘 FACEBOOK (SCRAPING + SCREENSHOTS):'));
+      console.log(chalk.gray(`  • URLs: ${fb.total}`));
+      console.log(chalk.green(`  • Exitosos: ${fb.exitosos}`));
+      console.log(chalk.blue(`  • Con datos extraídos: ${fb.conDatos}`));
+      console.log(chalk.blue(`  • Con screenshots: ${fb.conScreenshots}`));
+    }
 
-    console.log(chalk.cyan('\n🌐 OTROS SITIOS (SOLO SCREENSHOTS CON PUPPETEER):'));
-    console.log(chalk.gray(`  • URLs: ${otros.length}`));
-    console.log(chalk.green(`  • Exitosos: ${otros.filter(r => r.exito).length}`));
-    console.log(chalk.blue(`  • Con screenshots: ${otros.filter(r => r.screenshot?.exito).length}`));
+    if (stats.otro) {
+      const otros = stats.otro;
+      console.log(chalk.cyan('\n🌐 OTROS SITIOS (SOLO SCREENSHOTS):'));
+      console.log(chalk.gray(`  • URLs: ${otros.total}`));
+      console.log(chalk.green(`  • Exitosos: ${otros.exitosos}`));
+      console.log(chalk.blue(`  • Con screenshots: ${otros.conScreenshots}`));
+    }
 
     console.log(chalk.green.bold('\n✨ ¡Revisa el archivo PDF y los datos extraídos para ver los resultados!\n'));
   }

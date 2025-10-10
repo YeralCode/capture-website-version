@@ -101,7 +101,7 @@ async function realizarLoginFacebookPersistente(page) {
     
     // Navegar directamente a página principal primero para obtener cookies
     await page.goto('https://www.facebook.com', { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(1000);
     
     // Buscar campos de login en la página principal
     let emailField = await page.$('input[name="email"]');
@@ -111,7 +111,7 @@ async function realizarLoginFacebookPersistente(page) {
     if (!emailField || !passwordField) {
       console.log('📱 Navegando a página de login móvil (evita verificaciones)...');
       await page.goto('https://m.facebook.com/login', { waitUntil: 'domcontentloaded' });
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(1000);
       
       // Esperar campos de login con múltiples selectores
       try {
@@ -378,7 +378,7 @@ const CONFIGURACION_DEFECTO = {
 // Configuración para navegador REAL visible CON barra de navegación
 const PLAYWRIGHT_OPTIONS_REAL = {
   headless: false, // ¡NAVEGADOR REAL VISIBLE!
-  slowMo: 500,     // Pausa entre acciones
+  slowMo: 100,     // Pausa entre acciones (reducido para velocidad)
   args: [
     '--start-maximized',
     '--disable-blink-features=AutomationControlled',
@@ -681,7 +681,7 @@ export class ScreenshotService {
         waitUntil: 'domcontentloaded',
         timeout: 15000
       });
-      await paginaTest.waitForTimeout(3000);
+      await paginaTest.waitForTimeout(1500);
       
       const urlActual = paginaTest.url();
       const contenido = await paginaTest.content();
@@ -708,7 +708,7 @@ export class ScreenshotService {
         waitUntil: 'domcontentloaded',
         timeout: 15000
       });
-      await paginaTest.waitForTimeout(3000);
+      await paginaTest.waitForTimeout(1500);
       
       const urlActual = paginaTest.url();
       const contenido = await paginaTest.content();
@@ -794,6 +794,7 @@ export class ScreenshotService {
     let huboError = false;
     let mensajeError = null;
     let paginaCreada = false; // Flag para saber si cerramos la página al final
+    let urlFinal = url; // Capturar URL final después de redirecciones
     
     try {
       // Normalizar URL (agregar protocolo si no lo tiene)
@@ -916,7 +917,7 @@ export class ScreenshotService {
           
           // Esperar tiempo adicional para que el contenido básico se cargue
           console.log(`⏳ Esperando carga completa del contenido básico...`);
-          await page.waitForTimeout(8000);
+          await page.waitForTimeout(3000);
           
           // Verificar la URL actual después de la navegación
           const urlActual = page.url();
@@ -935,6 +936,10 @@ export class ScreenshotService {
             urlActual.includes('facebook.com/unsupportedbrowser')
           );
           
+          // ⚠️ NUEVO: Detectar redirección interna con parámetro _rdr (ej: m.facebook → www.facebook)
+          // Si hay _rdr en la URL + mensaje de error = perfil bloqueado
+          const tieneParametroRedireccion = urlActual.includes('_rdr') || urlActual.includes('_rdc');
+          
           // Verificar si es una página de login
           const esLoginPage = contenidoPagina.includes('name="email"') || 
                               contenidoPagina.includes('name="pass"') ||
@@ -942,23 +947,108 @@ export class ScreenshotService {
                               contenidoPagina.includes('Móvil o correo electrónico') ||
                               urlActual.includes('login');
           
-          // Verificar contenido que indica perfil no encontrado (versión computador)
-          const perfilNoEncontrado = contenidoPagina.includes('No se encontró') ||
-                                     contenidoPagina.includes('not found') ||
-                                     contenidoPagina.includes('no disponible') ||
-                                     contenidoPagina.includes('not available') ||
-                                     contenidoPagina.includes('This content isn\'t available') ||
-                                     contenidoPagina.includes('Contenido no disponible') ||
-                                     contenidoPagina.includes('Page not found') ||
-                                     contenidoPagina.includes('Página no encontrada') ||
-                                     contenidoPagina.includes('Sorry, this page isn\'t available') ||
-                                     fueRedirigidoAPaginaPrincipal;
+          // ⚠️ LÓGICA MEJORADA ESPECÍFICA PARA FACEBOOK: Detectar contenido bloqueado con MÁXIMA PRECISIÓN
           
-          if (perfilNoEncontrado && !esLoginPage) {
-            console.log(`🚫 Perfil de Facebook no encontrado o no disponible`);
-            console.log(`📄 Tomando screenshot del error/redirección para documentar`);
-            // Continuar con el screenshot de la página de error/redirección
-            console.log(`📸 Screenshot de perfil no disponible en Facebook`);
+          // 1. Detectar mensajes de error de Facebook (más completo)
+          const contenidoLower = contenidoPagina.toLowerCase();
+          const tieneContenidoDeError = contenidoLower.includes('this content isn\'t available') ||
+                                       contenidoLower.includes('contenido no está disponible') ||
+                                       contenidoLower.includes('este contenido no está disponible') ||
+                                       contenidoLower.includes('este contenido no está disponible en este momento') ||
+                                       contenidoLower.includes('sorry, this page isn\'t available') ||
+                                       contenidoLower.includes('page not found') ||
+                                       contenidoLower.includes('página no encontrada') ||
+                                       contenidoLower.includes('this page isn\'t available right now') ||
+                                       contenidoLower.includes('no se encuentra disponible') ||
+                                       contenidoLower.includes('content not found') ||
+                                       contenidoLower.includes('contenido no se encuentra') ||
+                                       contenidoLower.includes('content isn\'t available right now') ||
+                                       contenidoLower.includes('el propietario solo compartió el contenido');
+          
+          // 2. Detectar URL de contenido específico (video/post)
+          const esContenidoEspecifico = urlObjetivo.includes('/videos/') || 
+                                       urlObjetivo.includes('/posts/') || 
+                                       urlObjetivo.includes('/photo/') ||
+                                       urlObjetivo.includes('/permalink/');
+          
+          // 3. Detectar título de página que indica error
+          const tituloPagina = await page.title();
+          const tituloEsError = tituloPagina.toLowerCase().includes('facebook') && tituloPagina.length < 30;
+          
+          // 4. Detectar contenido muy escaso (página casi vacía = bloqueada)
+          // Extraer solo el texto visible (sin HTML, scripts, styles)
+          const textoVisible = contenidoPagina
+            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '') // Quitar scripts
+            .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')   // Quitar styles
+            .replace(/<[^>]*>/g, '')  // Quitar tags HTML
+            .replace(/\s+/g, ' ')     // Normalizar espacios
+            .trim();
+          const contenidoMuyEscaso = textoVisible.length < 1000;
+          
+          // 4b. Detectar mensajes de error MUY ESPECÍFICOS (alta confianza)
+          const mensajeErrorEspecifico = contenidoLower.includes('este contenido no está disponible en este momento') ||
+                                        contenidoLower.includes('this content isn\'t available right now') ||
+                                        contenidoLower.includes('el propietario solo compartió el contenido') ||
+                                        contenidoLower.includes('owner only shared it with a small group');
+          
+          // 5. Detectar si el body principal tiene clase de error
+          const tieneClaseError = contenidoPagina.includes('class="error"') || 
+                                 contenidoPagina.includes('error-page') ||
+                                 contenidoPagina.includes('not-found');
+          
+          // 🎯 DECISIÓN FINAL DE BLOQUEO (SOLO PARA FACEBOOK)
+          // Condiciones principales de bloqueo:
+          const perfilNoEncontrado = 
+            // CASO 1: Mensaje de error + redirección clara
+            (tieneContenidoDeError && (fueRedirigidoAPaginaPrincipal || tieneParametroRedireccion)) ||
+            // CASO 2: Contenido específico con error (video/post eliminado)
+            (esContenidoEspecifico && tieneContenidoDeError) ||
+            // CASO 3: Mensaje de error + título sospechoso + contenido escaso
+            (tieneContenidoDeError && tituloEsError && contenidoMuyEscaso) ||
+            // CASO 4: Mensaje de error + clases de error en HTML
+            (tieneContenidoDeError && tieneClaseError) ||
+            // CASO 5: Mensaje de error MUY ESPECÍFICO (alta confianza - sin login)
+            // Si tiene mensajes como "Este contenido no está disponible en este momento"
+            (mensajeErrorEspecifico && !esLoginPage);
+          
+          // 📊 DEBUG: Mostrar análisis de detección (solo para Facebook)
+          console.log(`\n🔍 ========== ANÁLISIS DE DETECCIÓN (FACEBOOK) ==========`);
+          console.log(`   🌐 URL objetivo: ${urlObjetivo}`);
+          console.log(`   🌐 URL actual: ${urlActual}`);
+          console.log(`   📄 Título: "${tituloPagina}" (length: ${tituloPagina.length})`);
+          console.log(`   ⚠️  Tiene mensaje de error: ${tieneContenidoDeError ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   🚨 Mensaje error ESPECÍFICO: ${mensajeErrorEspecifico ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   🔒 Es página de login: ${esLoginPage ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   🔄 Redirigido a principal: ${fueRedirigidoAPaginaPrincipal ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   🔗 Parámetro redireccion: ${tieneParametroRedireccion ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   📝 Texto visible escaso: ${contenidoMuyEscaso ? '✅ SÍ' : '❌ NO'} (${textoVisible.length} chars)`);
+          console.log(`   🏷️  Clase de error: ${tieneClaseError ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   🎬 Contenido específico: ${esContenidoEspecifico ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   ❌ Título de error: ${tituloEsError ? '✅ SÍ' : '❌ NO'}`);
+          console.log(`   ➡️  RESULTADO FINAL: ${perfilNoEncontrado ? '🚫 BLOQUEADO' : '✅ ACCESIBLE'}`);
+          console.log(`========================================================\n`);
+          
+          if (perfilNoEncontrado) {
+            const razonBloqueo = esContenidoEspecifico 
+              ? '🚫 Contenido específico (video/post) no disponible o eliminado'
+              : '🚫 Perfil de Facebook no encontrado (mensaje de error + redirección detectada)';
+            
+            console.log(razonBloqueo);
+            console.log(`📄 Tomando screenshot del error para documentar`);
+            console.log(`📸 Screenshot de contenido no disponible en Facebook`);
+            
+            // IMPORTANTE: Marcar en la página que el contenido no fue encontrado
+            await page.evaluate((razon) => {
+              window.__paginaBloqueada = true;
+              window.__razonBloqueo = razon;
+            }, razonBloqueo);
+          } else if (tieneContenidoDeError && !fueRedirigidoAPaginaPrincipal && !esContenidoEspecifico) {
+            console.log(`⚠️ Mensaje de error detectado PERO sin redirección (perfil general) - probablemente es un banner/aviso`);
+            console.log(`✅ La página cargó correctamente en la URL esperada`);
+            // NO marcar como bloqueada
+          } else if (fueRedirigidoAPaginaPrincipal && esLoginPage) {
+            console.log(`🔒 Facebook redirigió a login - la página puede requerir autenticación`);
+            // NO marcar como bloqueada, solo requiere login
           } else if (esLoginPage) {
             console.log(`🔒 Página de Facebook requiere login, generando página informativa formal...`);
             
@@ -1000,7 +1090,7 @@ export class ScreenshotService {
           
           // Esperar tiempo adicional para que el contenido se cargue
           console.log(`⏳ Esperando carga completa del contenido de Instagram...`);
-          await page.waitForTimeout(8000);
+          await page.waitForTimeout(3000);
           
           // Verificar si la página requiere login
           const contenidoPagina = await page.content();
@@ -1011,7 +1101,23 @@ export class ScreenshotService {
                               contenidoPagina.includes('Teléfono, usuario o correo electrónico') ||
                               page.url().includes('accounts/login');
           
-          if (esLoginPage) {
+          // Verificar si el perfil no está disponible (bloqueado/eliminado)
+          const perfilInstagramBloqueado = contenidoPagina.includes('Sorry, this page isn\'t available') ||
+                                          contenidoPagina.includes('This page isn\'t available') ||
+                                          contenidoPagina.includes('lo sentimos, esta página no está disponible') ||
+                                          contenidoPagina.includes('página no está disponible');
+          
+          if (perfilInstagramBloqueado && !esLoginPage) {
+            console.log(`🚫 Perfil de Instagram no encontrado o no disponible`);
+            console.log(`📄 Tomando screenshot del error para documentar`);
+            console.log(`📸 Screenshot de perfil no disponible en Instagram`);
+            
+            // IMPORTANTE: Marcar en la página que el perfil no fue encontrado
+            await page.evaluate(() => {
+              window.__paginaBloqueada = true;
+              window.__razonBloqueo = 'Perfil de Instagram no encontrado o no disponible';
+            });
+          } else if (esLoginPage) {
             console.log(`🔒 Página de Instagram requiere login, generando página informativa formal...`);
             
             // Crear página informativa formal para Instagram
@@ -1057,6 +1163,10 @@ export class ScreenshotService {
             console.log(`📄 Navegación exitosa a sitio normal: ${urlObjetivo}`);
           }
           
+          // ESPERAR REDIRECCIONES META REFRESH (como las de Coljuegos)
+          console.log(chalk.gray('⏳ Esperando posibles redirecciones META REFRESH (2s)...'));
+          await page.waitForTimeout(2000);
+          
         } catch (navError) {
           console.log(`⚠️ Error navegando a ${urlObjetivo}: ${navError.message}`);
           navegacionExitosa = false;
@@ -1090,7 +1200,7 @@ export class ScreenshotService {
 
       try {
         // Después de la navegación, esperar un momento para que cargue el contenido
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(2000);
         
         // Si estamos en Facebook, verificar si seguimos en una página de verificación
         if (esFacebook) {
@@ -1103,7 +1213,7 @@ export class ScreenshotService {
               const skipButton = await page.$('button:has-text("No ahora"), button:has-text("Skip"), button:has-text("Not now"), a:has-text("No ahora"), a:has-text("Skip")');
               if (skipButton) {
                 await skipButton.click();
-                await page.waitForTimeout(2000);
+                await page.waitForTimeout(1000);
                 console.log('🔄 Intentando saltar verificación...');
                 
                 // Intentar navegar nuevamente a la página objetivo
@@ -1128,7 +1238,7 @@ export class ScreenshotService {
       
       // Espera adicional para evitar sobreposiciones entre capturas
       console.log(`⏳ Esperando estabilización de página antes de captura...`);
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(1000);
 
         // Intentar esperar a que las imágenes se carguen
         try {
@@ -1156,11 +1266,11 @@ export class ScreenshotService {
           await page.evaluate(() => {
             window.scrollTo(0, document.body.scrollHeight);
           });
-          await page.waitForTimeout(1000);
+          await page.waitForTimeout(500);
           await page.evaluate(() => {
             window.scrollTo(0, 0);
           });
-          await page.waitForTimeout(500);
+          await page.waitForTimeout(300);
         } catch (error) {
           // Ignorar errores de scroll
         }
@@ -1190,6 +1300,20 @@ export class ScreenshotService {
         // En navegador real, intentar captura de ventana completa con barra de direcciones
         
         // MODO PARALELO: traer pestaña al frente y capturar ventana del sistema
+        // ESPERAR REDIRECCIONES META REFRESH (Coljuegos usa <meta http-equiv="refresh">)
+        console.log(chalk.gray('⏳ Esperando posibles redirecciones META REFRESH (2s)...'));
+        await page.waitForTimeout(2000);
+        
+        // CAPTURAR URL FINAL (después de posibles redirecciones)
+        try {
+          urlFinal = page.url();
+          if (urlFinal !== url && urlFinal !== urlNormalizada) {
+            console.log(chalk.cyan(`🔄 Redirección detectada: ${url} → ${urlFinal}`));
+          }
+        } catch (e) {
+          console.log(chalk.gray(`⚠️ No se pudo obtener URL final: ${e.message}`));
+        }
+        
         if (paginaCreada) {
           console.log('⚡ Semi-paralelo: Trayendo pestaña al frente...');
           
@@ -1197,7 +1321,7 @@ export class ScreenshotService {
           await page.bringToFront();
           
           // 2. Esperar a que el sistema operativo cambie de pestaña visualmente
-          await page.waitForTimeout(2500);
+          await page.waitForTimeout(1500);
           
           // 3. Capturar ventana del sistema (con barra de navegación)
           console.log('📸 Capturando ventana con barra de navegación...');
@@ -1214,7 +1338,7 @@ export class ScreenshotService {
         } else {
           // MODO SECUENCIAL: captura de ventana del sistema con barra
           console.log('🎯 Navegador real: Intentando capturar ventana completa con barra...');
-          await page.waitForTimeout(2000);
+          await page.waitForTimeout(1000);
           
           const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta);
           
@@ -1236,6 +1360,22 @@ export class ScreenshotService {
       });
       }
 
+      // Leer flags de la página antes de cerrarla
+      let paginaBloqueada = false;
+      let razonBloqueo = null;
+      try {
+        const flags = await page.evaluate(() => {
+          return {
+            bloqueada: window.__paginaBloqueada || false,
+            razon: window.__razonBloqueo || null
+          };
+        });
+        paginaBloqueada = flags.bloqueada;
+        razonBloqueo = flags.razon;
+      } catch (e) {
+        // Ignorar errores al leer flags
+      }
+      
       // Obtener información del archivo
       const stats = await fs.stat(rutaCompleta);
       
@@ -1244,9 +1384,13 @@ export class ScreenshotService {
         nombreArchivo: rutaCompleta.split('/').pop(),
         rutaCompleta,
         tamanio: stats.size,
+        url: url, // URL original
+        urlFinal: urlFinal, // URL final (después de redirecciones)
         timestamp: new Date().toISOString(),
         error: mensajeError,
-        tipoError: huboError ? this.clasificarError(mensajeError) : null
+        tipoError: huboError ? this.clasificarError(mensajeError) : null,
+        paginaBloqueada: paginaBloqueada, // NUEVO: Flag de página bloqueada
+        razonBloqueo: razonBloqueo // NUEVO: Razón del bloqueo
       };
 
     } finally {
@@ -2600,7 +2744,7 @@ export class ScreenshotService {
       await page.setContent(htmlConMarco);
       
       // Esperar a que se renderice completamente
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(1000);
       
       // Intentar esperar a que se carguen las imágenes y otros recursos
       try {
@@ -2624,7 +2768,7 @@ export class ScreenshotService {
       console.log('📸 Capturando ventana completa con herramientas del sistema...');
       
       // Esperar un momento para que la página esté completamente cargada
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       const timestamp = Date.now();
       const tempPath = `/tmp/browser_screenshot_${timestamp}.png`;

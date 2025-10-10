@@ -198,17 +198,10 @@ export class PDFGenerator {
       `Tipo de conexión: ${infoRed.tipoConexion}`,
       infoRed.interfacesRed ? `Interfaces de red activas: ${infoRed.interfacesRed}` : '',
       '',
-      'DESGLOSE POR TIPO DE PLATAFORMA:',
-      `• Instagram: ${instagramConContenido}/${instagram.length} URLs (${instagram.length > 0 ? ((instagramConContenido/instagram.length)*100).toFixed(1) : '0.0'}%)`,
-      `• Facebook: ${facebookConContenido}/${facebook.length} URLs (${facebook.length > 0 ? ((facebookConContenido/facebook.length)*100).toFixed(1) : '0.0'}%)`,
-      `• Otros sitios web: ${otrosConContenido}/${otros.length} URLs (${otros.length > 0 ? ((otrosConContenido/otros.length)*100).toFixed(1) : '0.0'}%)`,
-      '',
-      'EVALUACIÓN DE DISPONIBILIDAD:',
-      porcentajeContenidoReal >= 70 ? '✅ Excelente disponibilidad de contenido y conectividad estable' :
-      porcentajeContenidoReal >= 50 ? '⚠️ Disponibilidad moderada - posibles restricciones de acceso' :
-      porcentajeContenidoReal >= 30 ? '🔶 Baja disponibilidad - verificar conectividad y URLs' :
-      '🚨 Muy baja disponibilidad - problemas de red o URLs obsoletas',
-      ''
+      'PÁGINAS NO BLOQUEADAS POR PLATAFORMA:',
+      `• Instagram: ${instagramConContenido} de ${instagram.length} no bloqueadas (${instagram.length > 0 ? ((instagramConContenido/instagram.length)*100).toFixed(1) : '0.0'}%)`,
+      `• Facebook: ${facebookConContenido} de ${facebook.length} no bloqueadas (${facebook.length > 0 ? ((facebookConContenido/facebook.length)*100).toFixed(1) : '0.0'}%)`,
+      `• Otros sitios web: ${otrosConContenido} de ${otros.length} no bloqueadas (${otros.length > 0 ? ((otrosConContenido/otros.length)*100).toFixed(1) : '0.0'}%)`,
     ].filter(item => item !== ''); // Filtrar líneas vacías
 
     this.agregarLista(estadisticas);
@@ -368,6 +361,16 @@ export class PDFGenerator {
       this.pdf.setFont('helvetica', 'bold');
       this.pdf.text(`${indice + 1}. URL: ${resultado.url}`, this.margenIzquierdo, this.posicionY);
       this.posicionY += 8;
+      
+      // Si hay redirección (especialmente Coljuegos), mostrarla
+      if (resultado.bloqueadoPorColjuegos && resultado.urlFinal && resultado.urlFinal !== resultado.url) {
+        this.pdf.setFontSize(9);
+        this.pdf.setFont('helvetica', 'italic');
+        this.pdf.setTextColor(255, 0, 0); // Rojo para advertencia
+        this.pdf.text(`Redirigido a: ${resultado.urlFinal}`, this.margenIzquierdo, this.posicionY);
+        this.pdf.setTextColor(0, 0, 0); // Volver a negro
+        this.posicionY += 7;
+      }
 
       // Información del tipo y contenido
       this.pdf.setFontSize(10);
@@ -378,7 +381,12 @@ export class PDFGenerator {
       const tieneContenidoReal = this.evaluarContenidoExigente(resultado);
       const estaBloqueado = tieneContenidoReal === 'OK' ? 'NO' : 'SÍ';
       
-      this.pdf.text(`Bloqueado: ${estaBloqueado}`, this.margenIzquierdo + 100, this.posicionY);
+      // Agregar motivo si es Coljuegos
+      const textoBloqueado = resultado.bloqueadoPorColjuegos 
+        ? `${estaBloqueado} (Coljuegos)` 
+        : estaBloqueado;
+      
+      this.pdf.text(`Bloqueado: ${textoBloqueado}`, this.margenIzquierdo + 100, this.posicionY);
       this.posicionY += 8;
 
       // Información del archivo
@@ -528,8 +536,13 @@ export class PDFGenerator {
    * @returns {string} 'OK' si tiene contenido real, 'No' si no está disponible
    */
   evaluarContenidoExigente(resultado) {
-    // Priorizar análisis de scraping si está disponible
-    if (resultado.datosScraping || resultado.tieneContenido !== undefined) {
+    // PRIORIDAD MÁXIMA: Detectar bloqueo por Coljuegos
+    if (resultado.bloqueadoPorColjuegos === true) {
+      return 'No'; // Bloqueado por Coljuegos
+    }
+    
+    // Priorizar análisis de scraping o evaluación de contenido si está disponible
+    if (resultado.datosScraping || resultado.tieneContenido !== undefined || resultado.evaluacionContenido) {
       return this.evaluarContenidoConScraping(resultado);
     }
 
@@ -603,6 +616,11 @@ export class PDFGenerator {
    * @returns {string} 'OK' si tiene contenido real, 'No' si no está disponible
    */
   evaluarContenidoConScraping(resultado) {
+    // PRIORIDAD 0: Detectar bloqueo por Coljuegos (Colombia)
+    if (resultado.bloqueadoPorColjuegos === true) {
+      return 'No'; // Bloqueado por autoridades colombianas
+    }
+    
     // PRIORIDAD 1: Si hay evaluación de contenido del servicio integrado, usarla
     if (resultado.evaluacionContenido) {
       return resultado.evaluacionContenido.tieneContenido ? 'OK' : 'No';

@@ -414,15 +414,40 @@ def extraer_perfil_instagram_simple(parametros):
             datos_perfil['error_busqueda_imagen'] = str(e)
         
         # Verificar si el usuario existe basándose en el contenido de la página
-        if 'not found' in response.text.lower() or 'page not found' in response.text.lower():
+        texto_respuesta = response.text.lower()
+        
+        # PRIORIDAD 1: Detectar páginas bloqueadas/no disponibles
+        if ('sorry, this page isn\'t available' in texto_respuesta or
+            'this page isn\'t available' in texto_respuesta or
+            'lo sentimos, esta página no está disponible' in texto_respuesta or
+            'página no está disponible' in texto_respuesta):
+            datos_perfil['usuario_existe'] = False
+            datos_perfil['error'] = 'Página no disponible (posiblemente eliminada o bloqueada)'
+        
+        # PRIORIDAD 2: Detectar usuario no encontrado
+        elif 'not found' in texto_respuesta or 'page not found' in texto_respuesta:
             datos_perfil['usuario_existe'] = False
             datos_perfil['error'] = 'Usuario no encontrado'
+        
+        # PRIORIDAD 3: Si descargamos la imagen, el usuario existe
         elif datos_perfil['imagen_perfil_descargada']:
             datos_perfil['usuario_existe'] = True
+        
+        # PRIORIDAD 4: Si detectamos login, probablemente el usuario existe
         elif login_detectado:
-            # Si detectamos login, probablemente el usuario existe
-            datos_perfil['usuario_existe'] = True
-            datos_perfil['acceso_limitado'] = True
+            # Verificar que no sea un caso de perfil eliminado que redirige a login
+            if not any(blocked_msg in texto_respuesta for blocked_msg in [
+                'this page isn\'t available',
+                'página no está disponible',
+                'sorry, this page'
+            ]):
+                datos_perfil['usuario_existe'] = True
+                datos_perfil['acceso_limitado'] = True
+            else:
+                datos_perfil['usuario_existe'] = False
+                datos_perfil['error'] = 'Perfil no disponible (eliminado o bloqueado)'
+        
+        # PRIORIDAD 5: Verificar título
         elif 'instagram' in datos_perfil['titulo'].lower() and username in datos_perfil['titulo'].lower():
             datos_perfil['usuario_existe'] = True
         
