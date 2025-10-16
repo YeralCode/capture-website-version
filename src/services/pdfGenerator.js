@@ -391,7 +391,8 @@ export class PDFGenerator {
 
       // Información del archivo
       this.pdf.text(`Archivo: ${captura.nombreArchivo}`, this.margenIzquierdo, this.posicionY);
-      this.pdf.text(`Tamano: ${this.formatearTamanio(captura.tamanio)}`, this.margenIzquierdo + 100, this.posicionY);
+      this.posicionY += 9;
+      this.pdf.text(`Tamano: ${this.formatearTamanio(captura.tamanio)}`, this.margenIzquierdo, this.posicionY);
       this.posicionY += 8;
 
       // Leer y convertir imagen
