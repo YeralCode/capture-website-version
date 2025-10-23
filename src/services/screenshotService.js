@@ -6,6 +6,8 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
+import https from 'https';
+import http from 'http';
 
 /**
  * Credenciales para login automático en Facebook
@@ -74,6 +76,107 @@ async function cargarCookies(context, archivo) {
     console.log(`⚠️ Error cargando cookies: ${error.message}`);
     return false;
   }
+}
+
+/**
+ * Verifica el estado HTTP de una URL (solo para URLs normales, NO Facebook/Instagram)
+ * @param {string} url - URL a verificar
+ * @returns {Promise<{estado: string, mensaje: string}>}
+ */
+async function verificarUrlHttp(url) {
+  return new Promise((resolve) => {
+    try {
+      const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+      const isHttps = urlObj.protocol === 'https:';
+      const client = isHttps ? https : http;
+      
+      const options = {
+        hostname: urlObj.hostname,
+        port: urlObj.port || (isHttps ? 443 : 80),
+        path: urlObj.pathname + urlObj.search,
+        method: 'HEAD',
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        // Permitir certificados auto-firmados
+        rejectUnauthorized: false
+      };
+
+      const req = client.request(options, (res) => {
+        const statusCode = res.statusCode;
+        const location = res.headers.location;
+        
+        if (200 <= statusCode && statusCode < 300) {
+          resolve({
+            estado: "Activo", 
+            mensaje: `Responde ${statusCode}${location ? ` (redirige a ${location})` : ''}`
+          });
+        } else if (300 <= statusCode && statusCode < 400) {
+          resolve({
+            estado: "Redirige", 
+            mensaje: `Redirige a ${location || 'URL desconocida'}`
+          });
+        } else if (400 <= statusCode && statusCode < 500) {
+          resolve({
+            estado: "Inactivo", 
+            mensaje: `Error cliente ${statusCode}`
+          });
+        } else if (500 <= statusCode && statusCode < 600) {
+          resolve({
+            estado: "Error servidor", 
+            mensaje: `Error ${statusCode}`
+          });
+        } else {
+          resolve({
+            estado: "Desconocido", 
+            mensaje: `Código ${statusCode}`
+          });
+        }
+      });
+
+      req.on('error', (error) => {
+        if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+          resolve({
+            estado: "Sin respuesta", 
+            mensaje: "No se puede conectar al servidor"
+          });
+        } else if (error.code === 'ETIMEDOUT') {
+          resolve({
+            estado: "Sin respuesta", 
+            mensaje: "Tiempo de espera agotado"
+          });
+        } else if (error.code === 'CERT_HAS_EXPIRED' || error.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
+          resolve({
+            estado: "Error SSL", 
+            mensaje: "Certificado no válido"
+          });
+        } else {
+          resolve({
+            estado: "Error", 
+            mensaje: error.message
+          });
+        }
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        resolve({
+          estado: "Sin respuesta", 
+          mensaje: "Tiempo de espera agotado"
+        });
+      });
+
+      req.setTimeout(10000);
+      req.end();
+
+    } catch (error) {
+      resolve({
+        estado: "Error", 
+        mensaje: error.message
+      });
+    }
+  });
 }
 
 /**
@@ -451,7 +554,17 @@ export class ScreenshotService {
       erroresConexion: 0,
       otrosErrores: 0,
       paginasNoDisponibles: 0, // Contador para páginas con error de conexión
-      tamanioTotal: 0
+      tamanioTotal: 0,
+      // NUEVAS estadísticas de verificación HTTP
+      verificacionesHttp: {
+        activas: 0,
+        redirige: 0,
+        inactivas: 0,
+        errorServidor: 0,
+        sinRespuesta: 0,
+        errorSSL: 0,
+        otros: 0
+      }
     };
   }
 
@@ -821,6 +934,21 @@ export class ScreenshotService {
       // Detectar si es Facebook o Instagram PRIMERO
       const esFacebook = urlNormalizada.includes('facebook.com');
       const esInstagram = urlNormalizada.includes('instagram.com');
+      
+      // 🔍 VERIFICACIÓN HTTP PREVIA para URLs normales (NO Facebook/Instagram)
+      let verificacionHttp = null;
+      if (!esFacebook && !esInstagram) {
+        console.log(`🔍 Verificando estado HTTP de URL normal: ${urlNormalizada}`);
+        verificacionHttp = await verificarUrlHttp(urlNormalizada);
+        console.log(`📊 Estado HTTP: ${verificacionHttp.estado} - ${verificacionHttp.mensaje}`);
+        
+        // Si la URL no está activa, informar pero continuar con la captura
+        if (verificacionHttp.estado !== 'Activo' && verificacionHttp.estado !== 'Redirige') {
+          console.log(`⚠️ URL no está activa (${verificacionHttp.estado}), pero continuando con captura...`);
+        }
+      } else {
+        console.log(`🚫 Saltando verificación HTTP para ${esFacebook ? 'Facebook' : 'Instagram'} (requiere navegación completa)`);
+      }
       
       // Configurar headers especiales para Facebook
       let headers = { ...this.configuracion.headers };
@@ -1325,7 +1453,7 @@ export class ScreenshotService {
           
           // 3. Capturar ventana del sistema (con barra de navegación)
           console.log('📸 Capturando ventana con barra de navegación...');
-          const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta);
+          const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta, page);
           
           if (!capturaExitosa) {
             console.log('🔄 Captura de sistema falló, usando screenshot de Playwright...');
@@ -1340,7 +1468,7 @@ export class ScreenshotService {
           console.log('🎯 Navegador real: Intentando capturar ventana completa con barra...');
           await page.waitForTimeout(1000);
           
-          const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta);
+          const capturaExitosa = await this.capturarVentanaCompleta(rutaCompleta, page);
           
           if (!capturaExitosa) {
             console.log('🔄 Captura de sistema falló, usando screenshot normal de Playwright...');
@@ -1390,7 +1518,8 @@ export class ScreenshotService {
         error: mensajeError,
         tipoError: huboError ? this.clasificarError(mensajeError) : null,
         paginaBloqueada: paginaBloqueada, // NUEVO: Flag de página bloqueada
-        razonBloqueo: razonBloqueo // NUEVO: Razón del bloqueo
+        razonBloqueo: razonBloqueo, // NUEVO: Razón del bloqueo
+        verificacionHttp: verificacionHttp // NUEVO: Resultado de verificación HTTP (solo URLs normales)
       };
 
     } finally {
@@ -1420,6 +1549,36 @@ export class ScreenshotService {
       return 'dns';
     } else {
       return 'otro';
+    }
+  }
+
+  /**
+   * Actualiza las estadísticas de verificación HTTP
+   */
+  actualizarEstadisticasVerificacionHttp(verificacionHttp) {
+    if (!verificacionHttp) return;
+    
+    switch (verificacionHttp.estado) {
+      case 'Activo':
+        this.estadisticas.verificacionesHttp.activas++;
+        break;
+      case 'Redirige':
+        this.estadisticas.verificacionesHttp.redirige++;
+        break;
+      case 'Inactivo':
+        this.estadisticas.verificacionesHttp.inactivas++;
+        break;
+      case 'Error servidor':
+        this.estadisticas.verificacionesHttp.errorServidor++;
+        break;
+      case 'Sin respuesta':
+        this.estadisticas.verificacionesHttp.sinRespuesta++;
+        break;
+      case 'Error SSL':
+        this.estadisticas.verificacionesHttp.errorSSL++;
+        break;
+      default:
+        this.estadisticas.verificacionesHttp.otros++;
     }
   }
 
@@ -1557,35 +1716,57 @@ export class ScreenshotService {
         resultado = await this.capturarConCaptureWebsite(url, rutaCompleta);
       }
 
+      // Actualizar estadísticas de verificación HTTP
+      if (resultado.verificacionHttp) {
+        this.actualizarEstadisticasVerificacionHttp(resultado.verificacionHttp);
+      }
+
       // Actualizar estadísticas según el resultado
       if (resultado.exito) {
         this.estadisticas.exitosas++;
-        spinner.succeed(chalk.green(`✅ ${url} -> ${nombreArchivo} ${usarPlaywright ? '(Playwright)' : '(capture-website)'}`));
+        
+        // Mostrar estado de verificación HTTP si está disponible
+        let mensajeVerificacion = '';
+        if (resultado.verificacionHttp) {
+          const estado = resultado.verificacionHttp.estado;
+          const icono = estado === 'Activo' ? '🟢' : estado === 'Redirige' ? '🔄' : '🟡';
+          mensajeVerificacion = ` ${icono} HTTP:${estado}`;
+        }
+        
+        spinner.succeed(chalk.green(`✅ ${url} -> ${nombreArchivo} ${usarPlaywright ? '(Playwright)' : '(capture-website)'}${mensajeVerificacion}`));
       } else {
         // Hubo error pero se tomó screenshot
         this.estadisticas.fallidas++;
+        
+        // Mostrar estado de verificación HTTP si está disponible
+        let mensajeVerificacion = '';
+        if (resultado.verificacionHttp) {
+          const estado = resultado.verificacionHttp.estado;
+          const icono = estado === 'Sin respuesta' ? '🔴' : estado === 'Error SSL' ? '🔒' : '🟡';
+          mensajeVerificacion = ` ${icono} HTTP:${estado}`;
+        }
         
         // Clasificar error para estadísticas
         switch (resultado.tipoError) {
           case '404':
             this.estadisticas.errores404++;
-            spinner.warn(chalk.yellow(`📸 404 ${url} -> ${nombreArchivo} (screenshot de error tomado)`));
+            spinner.warn(chalk.yellow(`📸 404 ${url} -> ${nombreArchivo} (screenshot de error tomado)${mensajeVerificacion}`));
             break;
           case 'conexion':
             this.estadisticas.erroresConexion++;
-            spinner.warn(chalk.yellow(`📸 Conexión ${url} -> ${nombreArchivo} (screenshot de error tomado)`));
+            spinner.warn(chalk.yellow(`📸 Conexión ${url} -> ${nombreArchivo} (screenshot de error tomado)${mensajeVerificacion}`));
             break;
           case 'timeout':
             this.estadisticas.erroresConexion++;
-            spinner.warn(chalk.yellow(`📸 Timeout ${url} -> ${nombreArchivo} (screenshot de error tomado)`));
+            spinner.warn(chalk.yellow(`📸 Timeout ${url} -> ${nombreArchivo} (screenshot de error tomado)${mensajeVerificacion}`));
             break;
           case 'dns':
             this.estadisticas.erroresConexion++;
-            spinner.warn(chalk.yellow(`📸 DNS ${url} -> ${nombreArchivo} (screenshot de error tomado)`));
+            spinner.warn(chalk.yellow(`📸 DNS ${url} -> ${nombreArchivo} (screenshot de error tomado)${mensajeVerificacion}`));
             break;
           default:
             this.estadisticas.otrosErrores++;
-            spinner.warn(chalk.yellow(`📸 Error ${url} -> ${nombreArchivo} (screenshot de error tomado)`));
+            spinner.warn(chalk.yellow(`📸 Error ${url} -> ${nombreArchivo} (screenshot de error tomado)${mensajeVerificacion}`));
         }
       }
 
@@ -1647,11 +1828,26 @@ export class ScreenshotService {
     console.log(`   • Errores de conexión: ${this.estadisticas.erroresConexion}`);
     console.log(`   • Otros errores: ${this.estadisticas.otrosErrores}`);
     console.log(`🚫 Páginas "No se puede conectar" (Firefox): ${this.estadisticas.paginasNoDisponibles}`);
+    
+    // Mostrar estadísticas de verificación HTTP
+    const totalVerificaciones = Object.values(this.estadisticas.verificacionesHttp).reduce((a, b) => a + b, 0);
+    if (totalVerificaciones > 0) {
+      console.log('\n🔍 VERIFICACIONES HTTP (URLs normales):');
+      console.log(`🟢 Activas: ${this.estadisticas.verificacionesHttp.activas}`);
+      console.log(`🔄 Redirigen: ${this.estadisticas.verificacionesHttp.redirige}`);
+      console.log(`🟡 Inactivas: ${this.estadisticas.verificacionesHttp.inactivas}`);
+      console.log(`🔴 Sin respuesta: ${this.estadisticas.verificacionesHttp.sinRespuesta}`);
+      console.log(`🔒 Error SSL: ${this.estadisticas.verificacionesHttp.errorSSL}`);
+      console.log(`⚠️ Error servidor: ${this.estadisticas.verificacionesHttp.errorServidor}`);
+      console.log(`❓ Otros: ${this.estadisticas.verificacionesHttp.otros}`);
+    }
+    
     console.log(`📈 Total screenshots generados: ${total}`);
     console.log(`📁 Tamaño total: ${(this.estadisticas.tamanioTotal / 1024 / 1024).toFixed(2)} MB`);
     console.log(`📂 Directorio: ${this.configuracion.directorioSalida}`);
     console.log(`\n💡 Nota: TODAS las URLs tienen screenshot, incluso las que dieron error 404/conexión`);
     console.log(`🔥 Las páginas no disponibles se muestran con interfaz de Firefox "No se puede conectar"`);
+    console.log(`🚫 Facebook e Instagram NO usan verificación HTTP (requieren navegación completa)`);
   }
 
   /**
@@ -2763,73 +2959,164 @@ export class ScreenshotService {
   /**
    * Captura la ventana completa del navegador incluyendo barra de direcciones usando herramientas del sistema
    */
-  async capturarVentanaCompleta(rutaCompleta) {
+  async capturarVentanaCompleta(rutaCompleta, page) {
     try {
-      console.log('📸 Capturando ventana completa con herramientas del sistema...');
+      console.log('📸 Intentando captura con herramientas del sistema de Ubuntu...');
       
-      // Esperar un momento para que la página esté completamente cargada
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Esperar a que la página esté completamente visible y renderizada
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
       const timestamp = Date.now();
       const tempPath = `/tmp/browser_screenshot_${timestamp}.png`;
       
+      // Estrategia 1: Obtener el ID de la ventana del navegador usando Playwright
+      let windowId = null;
       try {
-        // Usar gnome-screenshot con la ventana enfocada
-        execSync(`gnome-screenshot -w -f "${tempPath}" 2>/dev/null`, { 
-          timeout: 5000,
-          stdio: 'pipe'
+        // Intentar obtener el ID de la ventana desde el navegador
+        const browserWindowId = await page.evaluate(() => {
+          return window.outerWidth && window.outerHeight ? true : false;
         });
-        console.log('📷 Screenshot de ventana tomado con gnome-screenshot');
-      } catch (error) {
-        try {
-          // Fallback: scrot con selección automática de ventana activa
-          execSync(`scrot -u "${tempPath}" 2>/dev/null`, { 
-            timeout: 5000,
-            stdio: 'pipe'
-          });
-          console.log('📷 Screenshot de ventana tomado con scrot');
-        } catch (error2) {
+        
+        if (browserWindowId) {
+          // Buscar la ventana de Chrome/Chromium por título
           try {
-            // Fallback: usar xwininfo + import para capturar ventana específica
-            const windowId = execSync('xdotool getactivewindow 2>/dev/null', { 
+            const searchResult = execSync('xdotool search --name "Chrome" 2>/dev/null | head -1', { 
               encoding: 'utf8',
               timeout: 2000 
             }).trim();
             
-            if (windowId) {
-              execSync(`import -window ${windowId} "${tempPath}" 2>/dev/null`, { 
-                timeout: 5000,
-                stdio: 'pipe'
-              });
-              console.log('📷 Screenshot de ventana tomado con import');
-            } else {
-              throw new Error('No se pudo obtener window ID');
+            if (searchResult) {
+              windowId = searchResult;
+              console.log(`🔍 Ventana de Chrome encontrada: ${windowId}`);
             }
-          } catch (error3) {
-            console.log('❌ No se encontraron herramientas de screenshot del sistema');
-            return false;
+          } catch (e) {
+            console.log('⚠️ No se pudo encontrar ventana por nombre');
           }
+        }
+      } catch (e) {
+        console.log('⚠️ No se pudo evaluar ventana del navegador');
+      }
+      
+      // Estrategia 2: Si no se encontró por nombre, usar ventana activa
+      if (!windowId) {
+        try {
+          windowId = execSync('xdotool getactivewindow 2>/dev/null', { 
+            encoding: 'utf8',
+            timeout: 2000 
+          }).trim();
+          console.log(`🔍 Usando ventana activa: ${windowId}`);
+        } catch (e) {
+          console.log('⚠️ No se pudo obtener ventana activa');
         }
       }
       
-      // Verificar que el archivo se creó
-      try {
-        await fs.access(tempPath);
-        
-        // Mover el archivo temporal a la ubicación final
-        await fs.copyFile(tempPath, rutaCompleta);
-        await fs.unlink(tempPath);
-        
-        console.log('✅ Screenshot de ventana completa guardado exitosamente');
-        return true;
-        
-      } catch (error) {
-        console.log('❌ El archivo de screenshot no se pudo crear o mover');
+      // Intentar diferentes métodos de captura
+      let capturaExitosa = false;
+      
+      // MÉTODO 1: import de ImageMagick con ID de ventana específico (MEJOR CALIDAD)
+      if (windowId) {
+        try {
+          console.log(`📷 Intentando captura con import (ImageMagick) de ventana ${windowId}...`);
+          execSync(`import -window ${windowId} -frame "${tempPath}" 2>/dev/null`, { 
+            timeout: 8000,
+            stdio: 'pipe'
+          });
+          
+          // Verificar que el archivo se creó y tiene contenido
+          const stats = await fs.stat(tempPath);
+          if (stats.size > 1000) { // Al menos 1KB
+            console.log(`✅ Captura exitosa con import (${(stats.size / 1024).toFixed(2)} KB)`);
+            capturaExitosa = true;
+          }
+        } catch (error) {
+          console.log(`⚠️ Falló captura con import: ${error.message}`);
+        }
+      }
+      
+      // MÉTODO 2: gnome-screenshot (ventana enfocada)
+      if (!capturaExitosa) {
+        try {
+          console.log('📷 Intentando captura con gnome-screenshot...');
+          execSync(`gnome-screenshot -w -f "${tempPath}" 2>/dev/null`, { 
+            timeout: 8000,
+            stdio: 'pipe'
+          });
+          
+          const stats = await fs.stat(tempPath);
+          if (stats.size > 1000) {
+            console.log(`✅ Captura exitosa con gnome-screenshot (${(stats.size / 1024).toFixed(2)} KB)`);
+            capturaExitosa = true;
+          }
+        } catch (error) {
+          console.log(`⚠️ Falló captura con gnome-screenshot: ${error.message}`);
+        }
+      }
+      
+      // MÉTODO 3: scrot (ventana enfocada)
+      if (!capturaExitosa) {
+        try {
+          console.log('📷 Intentando captura con scrot...');
+          execSync(`scrot -u -z "${tempPath}" 2>/dev/null`, { 
+            timeout: 8000,
+            stdio: 'pipe'
+          });
+          
+          const stats = await fs.stat(tempPath);
+          if (stats.size > 1000) {
+            console.log(`✅ Captura exitosa con scrot (${(stats.size / 1024).toFixed(2)} KB)`);
+            capturaExitosa = true;
+          }
+        } catch (error) {
+          console.log(`⚠️ Falló captura con scrot: ${error.message}`);
+        }
+      }
+      
+      // MÉTODO 4: maim (alternativa moderna)
+      if (!capturaExitosa) {
+        try {
+          console.log('📷 Intentando captura con maim...');
+          if (windowId) {
+            execSync(`maim -i ${windowId} "${tempPath}" 2>/dev/null`, { 
+              timeout: 8000,
+              stdio: 'pipe'
+            });
+          } else {
+            execSync(`maim -u "${tempPath}" 2>/dev/null`, { 
+              timeout: 8000,
+              stdio: 'pipe'
+            });
+          }
+          
+          const stats = await fs.stat(tempPath);
+          if (stats.size > 1000) {
+            console.log(`✅ Captura exitosa con maim (${(stats.size / 1024).toFixed(2)} KB)`);
+            capturaExitosa = true;
+          }
+        } catch (error) {
+          console.log(`⚠️ Falló captura con maim: ${error.message}`);
+        }
+      }
+      
+      // Si algún método funcionó, mover el archivo
+      if (capturaExitosa) {
+        try {
+          await fs.access(tempPath);
+          await fs.copyFile(tempPath, rutaCompleta);
+          await fs.unlink(tempPath);
+          
+          console.log(chalk.green('✅ Screenshot de ventana completa guardado exitosamente con barra de navegación visible'));
+          return true;
+        } catch (error) {
+          console.log(`❌ Error moviendo archivo: ${error.message}`);
+          return false;
+        }
+      } else {
+        console.log(chalk.yellow('❌ Todos los métodos de captura del sistema fallaron'));
         return false;
       }
       
     } catch (error) {
-      console.log(`⚠️ Error capturando ventana completa: ${error.message}`);
+      console.log(`⚠️ Error general capturando ventana completa: ${error.message}`);
       return false;
     }
   }

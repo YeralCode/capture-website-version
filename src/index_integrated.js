@@ -200,7 +200,8 @@ class IntegratedScrapingAutomation {
         // '289_perfiles_redes_sociales_10_12_2024_LIMPIO.txt',
         
         // URLs de sitios web (HTTP - sitios de casinos/apuestas)
-        { archivo: '1203_SITIOS_WEB_11_2024.txt', protocolo: 'http' },
+        { archivo: '20250113791_instagram_facebook.txt', protocolo: 'http' },
+        { archivo: '20250113791_web.txt', protocolo: 'http' },
         
         // Otros archivos (comentados)
         // 'urls_test_login.txt',        // URLs de prueba para login
